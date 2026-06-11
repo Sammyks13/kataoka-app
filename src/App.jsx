@@ -113,18 +113,88 @@ const MUSCLES = [
   {key:"HAMS",     label:"Hamstrings", view:"back",  kw:["clean","zercher","deadlift"]},
   {key:"CALVES",   label:"Calves",     view:"back",  kw:["calf raise","calf"]},
 ];
+
+// Muscle contribution weights per exercise — what % of each muscle each exercise stimulates
+const EXERCISE_MUSCLE_WEIGHTS=[
+  {match:/bench|chest press/i,           w:{CHEST:0.40,DELTS_F:0.20,TRICEPS:0.40}},
+  {match:/to high fly|chest fly|pec/i,   w:{CHEST:0.80,DELTS_F:0.20}},
+  {match:/dip/i,                         w:{CHEST:0.30,TRICEPS:0.50,DELTS_F:0.20}},
+  {match:/pull.?up|chin.?up/i,           w:{LATS:0.50,BICEPS:0.30,DELTS_R:0.10,TRAPS:0.10}},
+  {match:/rock.*climber/i,               w:{LATS:0.45,BICEPS:0.35,DELTS_R:0.10,TRAPS:0.10}},
+  {match:/row|cable.*pull/i,             w:{LATS:0.35,BICEPS:0.25,DELTS_R:0.25,TRAPS:0.15}},
+  {match:/shoulder press|military|push press|^bb shoulder|ohp/i, w:{DELTS_F:0.50,TRICEPS:0.30,TRAPS:0.20}},
+  {match:/lat.?raise/i,                  w:{DELTS_F:0.80,TRAPS:0.20}},
+  {match:/reverse.*fly|rear.*delt/i,     w:{DELTS_R:0.90,TRAPS:0.10}},
+  {match:/zercher|squat(?!.*leg)/i,      w:{QUADS:0.40,GLUTES:0.25,HAMS:0.15,LOWERBACK:0.10,ABS:0.10}},
+  {match:/deadlift|rdl/i,                w:{HAMS:0.40,GLUTES:0.30,LOWERBACK:0.20,ABS:0.10}},
+  {match:/clean|snatch/i,                w:{QUADS:0.20,GLUTES:0.15,HAMS:0.10,TRAPS:0.20,LATS:0.15,DELTS_F:0.10,ABS:0.10}},
+  {match:/curl(?!.*wrist)/i,             w:{BICEPS:0.80,FOREARMS:0.20}},
+  {match:/wrist|twister/i,               w:{FOREARMS:1.00}},
+  {match:/crunch/i,                      w:{ABS:0.90,LOWERBACK:0.10}},
+  {match:/leg raise/i,                   w:{ABS:0.80,QUADS:0.20}},
+  {match:/tricep|extension(?!.*leg)/i,   w:{TRICEPS:1.00}},
+  {match:/shrug/i,                       w:{TRAPS:1.00}},
+  {match:/calf/i,                        w:{CALVES:1.00}},
+];
+
+// Universal category thresholds as BW ratio [beg, nov, int, adv, elite]
+const CATEGORY_THRESHOLDS={
+  hpush:  [0.50,0.75,1.00,1.25,1.50],
+  fly:    [0.25,0.40,0.60,0.80,1.00],
+  dip:    [0.30,0.50,0.75,1.00,1.35],
+  vpull:  [0.10,0.25,0.45,0.70,1.00],
+  hpull:  [0.40,0.60,0.85,1.10,1.40],
+  vpush:  [0.35,0.55,0.75,1.00,1.25],
+  lateraise:[0.10,0.15,0.22,0.30,0.40],
+  rearfly:[0.08,0.12,0.18,0.25,0.35],
+  squat:  [0.50,0.75,1.00,1.40,1.80],
+  hinge:  [0.60,0.90,1.25,1.60,2.00],
+  power:  [0.40,0.60,0.80,1.00,1.25],
+  curl:   [0.15,0.25,0.35,0.45,0.60],
+  tricep: [0.15,0.25,0.35,0.45,0.60],
+  core:   [0.20,0.35,0.50,0.70,0.90],
+  forearm:[0.10,0.18,0.28,0.40,0.55],
+  generic:[0.30,0.50,0.75,1.00,1.25],
+};
+const CATEGORY_PATTERNS=[
+  {match:/bench|chest press/i,           cat:"hpush"},
+  {match:/to high fly|chest fly|pec/i,   cat:"fly"},
+  {match:/dip/i,                         cat:"dip"},
+  {match:/pull.?up|chin.?up|pulldown/i,  cat:"vpull"},
+  {match:/rock.*climber/i,               cat:"vpull"},
+  {match:/row|cable.*pull/i,             cat:"hpull"},
+  {match:/shoulder press|military|push press|bb shoulder|ohp/i, cat:"vpush"},
+  {match:/lat.?raise/i,                  cat:"lateraise"},
+  {match:/reverse.*fly|rear.*delt/i,     cat:"rearfly"},
+  {match:/zercher|squat(?!.*leg)/i,      cat:"squat"},
+  {match:/deadlift|rdl/i,               cat:"hinge"},
+  {match:/clean|snatch/i,               cat:"power"},
+  {match:/curl(?!.*wrist)/i,             cat:"curl"},
+  {match:/tricep|extension(?!.*leg)/i,   cat:"tricep"},
+  {match:/crunch|leg raise/i,            cat:"core"},
+  {match:/wrist|twister/i,              cat:"forearm"},
+];
+
 const daysSince = d => d ? Math.floor((Date.now()-new Date(d))/86400000) : null;
 const recovColor = d => d===null?"#333":d===0?"#FF3B5C":d===1?"#FF6B35":d===2?"#FFD700":"#39FF14";
 const recovLabel = d => d===null?"—":d===0?"Today":d===1?"1d":d===2?"2d":`${d}d`;
 
-// Rank = strongest est. 1RM (relative to bodyweight) across ALL lifts that train the muscle.
+// Weighted muscle rank — weighted average of all exercises contributing to this muscle
 const muscleRank = (muscle, prs, bw) => {
-  let best=0;
+  let totalW=0,weightedRM=0;
   for(const [k,pr] of Object.entries(prs)){
     const name=k.replace(/_/g," ");
-    if(muscle.kw.some(kw=>name.includes(kw))) best=Math.max(best,pr.rm);
+    for(const {match,w} of EXERCISE_MUSCLE_WEIGHTS){
+      if(match.test(name)&&w[muscle.key]){
+        weightedRM+=pr.rm*w[muscle.key];
+        totalW+=w[muscle.key];
+        break;
+      }
+    }
   }
-  return best>0?{...getRank(best/bw),rm:Math.round(best)}:null;
+  if(totalW===0)return null;
+  const avgRM=weightedRM/totalW;
+  return{...getUniversalRank(null,avgRM,bw),rm:Math.round(avgRM)};
 };
 const muscleRecovery = (muscle, logs) => {
   for(const log of [...logs].reverse()){
@@ -173,25 +243,51 @@ const slThresholds=(table,bw)=>{
   const t=hi===lo?0:(bc-lo)/(hi-lo);
   return table[lo].map((v,i)=>Math.round(v+t*(table[hi][i]-v)));
 };
-const SL_TIERS=[{n:"BEGINNER",c:"#9CA3AF"},{n:"NOVICE",c:"#60A5FA"},{n:"INTERMEDIATE",c:"#34D399"},{n:"ADVANCED",c:"#F59E0B"},{n:"ELITE",c:"#FF3B5C"}];
+const SL_TIERS=[
+  {n:"BEGINNER",    c:"#9CA3AF", pct:5,  desc:"stronger than ~5% of men your build",  ratio:"1 in 20"},
+  {n:"NOVICE",      c:"#60A5FA", pct:25, desc:"stronger than ~25% of men your build", ratio:"1 in 4"},
+  {n:"INTERMEDIATE",c:"#34D399", pct:50, desc:"stronger than ~50% of men your build", ratio:"1 in 2"},
+  {n:"ADVANCED",    c:"#F59E0B", pct:75, desc:"stronger than ~75% of men your build", ratio:"top 25%"},
+  {n:"ELITE",       c:"#FF3B5C", pct:95, desc:"stronger than ~95% of men your build", ratio:"top 5%"},
+];
 // Age factors from strengthlevel.com age-adjusted tables (ratio vs peak adult 25-40)
 const AGE_FACTORS=[[15,0.857],[20,0.980],[25,1.0],[30,1.0],[35,1.0],[40,1.0],[45,0.947],[50,0.885],[55,0.816],[60,0.745],[65,0.674],[70,0.612],[75,0.551],[80,0.490]];
 const computeAge=dob=>{if(!dob)return 25;const b=new Date(dob+'T00:00:00'),t=new Date();let a=t.getFullYear()-b.getFullYear();const m=t.getMonth()-b.getMonth();if(m<0||(m===0&&t.getDate()<b.getDate()))a--;return a;};
 const ageMultiplier=age=>{const a=Math.max(15,Math.min(80,age));let lo=AGE_FACTORS[0],hi=AGE_FACTORS[AGE_FACTORS.length-1];for(let i=0;i<AGE_FACTORS.length-1;i++){if(AGE_FACTORS[i][0]<=a&&AGE_FACTORS[i+1][0]>=a){lo=AGE_FACTORS[i];hi=AGE_FACTORS[i+1];break;}}const t2=hi[0]===lo[0]?0:(a-lo[0])/(hi[0]-lo[0]);return lo[1]+t2*(hi[1]-lo[1]);};
-// Main entry: SL standards adjusted for both bodyweight AND age
-const getExerciseRank=(name,rm1,bw,dob=null)=>{
+// Universal rank — works for any exercise via category patterns, falls back to SL for big lifts
+const getUniversalRank=(name,rm1,bw,dob=null)=>{
+  const age=dob?computeAge(dob):25;
+  const af=ageMultiplier(age);
+  // Try SL table first (most accurate)
   const table=name?matchSL(name):null;
   if(table){
-    const age=dob?computeAge(dob):25;
-    const af=ageMultiplier(age);
-    const [b,n,i,a,e]=slThresholds(table,bw).map(v=>Math.round(v*af));
+    const[b,n,i,a,e]=slThresholds(table,bw).map(v=>Math.round(v*af));
     const idx=rm1>=e?4:rm1>=a?3:rm1>=i?2:rm1>=n?1:rm1>=b?0:-1;
-    if(idx<0)return{n:"UNTRAINED",c:"#4B5563",rm:Math.round(rm1),source:"sl",next:b,age,af:Math.round(af*100)};
-    const tier=SL_TIERS[idx];
-    return{n:tier.n,c:tier.c,rm:Math.round(rm1),source:"sl",next:[b,n,i,a,e][idx+1]||null,age,af:Math.round(af*100)};
+    const tier=idx>=0?SL_TIERS[idx]:null;
+    return{n:tier?.n??"UNTRAINED",c:tier?.c??"#4B5563",pct:tier?.pct??0,desc:tier?.desc??"below beginner standards",ratio:tier?.ratio??"",rm:Math.round(rm1),source:"sl",next:[b,n,i,a,e][idx+1]||null};
   }
-  return{...getRank(rm1/bw),rm:Math.round(rm1),source:"ratio"};
+  // Try category pattern
+  if(name){
+    const n2=name.toLowerCase();
+    for(const{match,cat}of CATEGORY_PATTERNS){
+      if(match.test(n2)){
+        const[b,nv,i,a,e]=CATEGORY_THRESHOLDS[cat].map(r=>Math.round(r*bw*af));
+        const r=rm1/bw/af;
+        const thresh=CATEGORY_THRESHOLDS[cat];
+        const idx=r>=thresh[4]?4:r>=thresh[3]?3:r>=thresh[2]?2:r>=thresh[1]?1:r>=thresh[0]?0:-1;
+        const tier=idx>=0?SL_TIERS[idx]:null;
+        return{n:tier?.n??"UNTRAINED",c:tier?.c??"#4B5563",pct:tier?.pct??0,desc:tier?.desc??"below beginner standards",ratio:tier?.ratio??"",rm:Math.round(rm1),source:"cat",cat,next:[b,nv,i,a,e][idx+1]||null};
+      }
+    }
+  }
+  // Generic ratio fallback
+  const r=rm1/bw;
+  const fallbackTiers=CATEGORY_THRESHOLDS.generic;
+  const idx=r>=fallbackTiers[4]?4:r>=fallbackTiers[3]?3:r>=fallbackTiers[2]?2:r>=fallbackTiers[1]?1:r>=fallbackTiers[0]?0:-1;
+  const tier=idx>=0?SL_TIERS[idx]:null;
+  return{n:tier?.n??"UNTRAINED",c:tier?.c??"#4B5563",pct:tier?.pct??0,desc:tier?.desc??"below beginner standards",ratio:tier?.ratio??"",rm:Math.round(rm1),source:"ratio"};
 };
+const getExerciseRank=getUniversalRank;
 const getRank = r => RANKS.find(x=>r>=x.min)||RANKS[RANKS.length-1];
 const epley   = (w,r) => r===1?w:Math.round(w*(1+r/30));
 const POWER   = ["Hang Clean","Zercher","Bench","Pull Up","Shoulder Press","Dips"];
@@ -214,6 +310,18 @@ const DEFAULT_TEMPLATES=[
     {id:"rf",name:"Reverse Fly",sets:2,targetReps:12},
   ]},
 ];
+
+// ── AI fetch helper ───────────────────────────────────────────────────────────
+const aiPost=async(apiKey,body)=>{
+  const resp=await fetch("https://api.anthropic.com/v1/messages",{
+    method:"POST",
+    headers:{"Content-Type":"application/json","x-api-key":apiKey,"anthropic-version":"2023-06-01","anthropic-dangerous-direct-browser-access":"true"},
+    body:JSON.stringify({model:"claude-sonnet-4-20250514",max_tokens:1000,...body})
+  });
+  const data=await resp.json();
+  if(data.error)throw new Error(data.error.message);
+  return(data.content||[]).filter(b=>b.type==="text").map(b=>b.text).join("");
+};
 
 // ─── Context ──────────────────────────────────────────────────────────────────
 const Ctx = createContext({});
@@ -436,10 +544,11 @@ function TodayChecklist(){
 
   const loadForDate=async(dateStr)=>{
     setLoading(true);setErr(null);setEvts(null);
+    if(!apiKey){setErr('Add API key in Settings (ME tab)');setLoading(false);return;}
     try{
       const resp=await fetch("https://api.anthropic.com/v1/messages",{
         method:"POST",
-        headers:{"Content-Type":"application/json"},
+        headers:{"Content-Type":"application/json","x-api-key":apiKey,"anthropic-version":"2023-06-01","anthropic-dangerous-direct-browser-access":"true"},
         body:JSON.stringify({
           model:"claude-sonnet-4-20250514",
           max_tokens:2000,
@@ -522,7 +631,7 @@ function TodayChecklist(){
 
 // ─── HOME SCREEN ──────────────────────────────────────────────────────────────
 function HomeScreen(){
-  const {T,dark,setDark,goals,saveGoals,workoutLogs,prs,bw,tab,morningLogs,nightLogs,comingSoon,quotes,go}=useContext(Ctx);
+  const {T,dark,setDark,goals,saveGoals,workoutLogs,prs,bw,tab,morningLogs,nightLogs,comingSoon,quotes,go,appNotes,saveAppNotes}=useContext(Ctx);
   const [editGoalId,setEditGoalId]=useState(null);
   const [weather,setWeather]=useState(null);
   const [loc,setLoc]=useState("Aarhus");
@@ -601,7 +710,36 @@ function HomeScreen(){
 
 
 
-      {/* Goals — shown before daily calendar */}
+      {/* Physique compact section */}
+      {(()=>{
+        try{
+          const phase=JSON.parse(localStorage.getItem('k3_phase')||'null');
+          const weighIns=JSON.parse(localStorage.getItem('k3_weighins')||'[]');
+          if(!phase)return null;
+          const latest=weighIns.length?weighIns[weighIns.length-1].weight:phase.startWeight;
+          const pct=phase.type==='bulk'
+            ?Math.min(100,Math.round((latest-phase.startWeight)/(phase.target-phase.startWeight)*100))
+            :Math.min(100,Math.round((phase.startWeight-latest)/(phase.startWeight-phase.target)*100));
+          const phaseCol=phase.type==="bulk"?"#FFD700":phase.type==="cut"?"#FF3B5C":"#39FF14";
+          return(
+            <>
+              <Divider/>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:6}}>
+                <div style={{fontFamily:"'Barlow Condensed',sans-serif",fontWeight:900,textTransform:"uppercase",fontSize:10,color:T.sub,letterSpacing:"0.12em"}}>PHYSIQUE</div>
+                <div style={{fontFamily:"'Barlow Condensed',sans-serif",fontSize:10,color:T.sub,cursor:"pointer"}} onClick={()=>tab("me")}>ME →</div>
+              </div>
+              <div style={{display:"flex",alignItems:"center",gap:12,marginBottom:5}}>
+                <div style={{fontFamily:"'Barlow Condensed',sans-serif",fontWeight:900,fontSize:14,color:phaseCol}}>{phase.type.toUpperCase()}</div>
+                <div style={{fontFamily:"'Barlow Condensed',sans-serif",fontSize:11,color:T.sub}}>{latest}kg → {phase.target}kg</div>
+                <div style={{fontFamily:"'Barlow Condensed',sans-serif",fontWeight:700,fontSize:11,color:phaseCol,marginLeft:"auto"}}>{pct}%</div>
+              </div>
+              <div style={{height:2,background:T.div,overflow:"hidden"}}>
+                <div style={{width:"100%",height:"100%",background:`linear-gradient(to right,#5C0000,#CC0000,#FFD700,#39FF14)`,transform:`translateX(${pct-100}%)`}}/>
+              </div>
+            </>
+          );
+        }catch{return null;}
+      })()}
       {goals.length>0&&(
         <>
           <Divider/>
@@ -649,6 +787,12 @@ function HomeScreen(){
 
       {/* Today checklist — live from Google Calendar, actual date computed at runtime */}
       <TodayChecklist/>
+
+      {/* Notes / don't forget */}
+      <Divider/>
+      <div style={{fontFamily:"'Barlow Condensed',sans-serif",fontWeight:900,textTransform:"uppercase",fontSize:10,color:T.sub,letterSpacing:"0.12em",marginBottom:6}}>NOTES / DON'T FORGET</div>
+      <textarea value={appNotes} onChange={e=>saveAppNotes(e.target.value)} placeholder="Training notes, reminders, anything..."
+        style={{background:"transparent",border:"none",borderBottom:"1px solid #222",borderRadius:0,padding:"6px 0",color:T.text,fontFamily:"'Barlow',sans-serif",fontSize:12,outline:"none",width:"100%",minHeight:44,resize:"vertical",lineHeight:1.5}}/>
     </div>
   );
 }
@@ -711,6 +855,7 @@ function WorkoutHome(){
       {/* Primary actions */}
       <Btn label="Log Workout" onClick={()=>go("workout-log")} style={{marginBottom:10,padding:"18px"}}/>
       <Btn label="Edit Templates" onClick={()=>go("workout-edit-templates")} ghost style={{marginBottom:10,padding:"18px"}}/>
+      <Btn label="Strength Rankings" onClick={()=>go("workout-ranks")} ghost style={{marginBottom:10,padding:"18px"}}/>
       <button onClick={async()=>{
         if(!prResetArmed){setPrResetArmed(true);setTimeout(()=>setPrResetArmed(false),3000);}
         else{await resetPRs();setPrResetArmed(false);}
@@ -726,6 +871,7 @@ function WorkoutHome(){
           {Object.entries(prs).map(([key,pr])=>{
             const exName=key.replace(/_/g," ");
             const rank=getExerciseRank(exName,pr.rm,bw,userDOB);
+            const showRankBadge=rank&&rank.source==="sl";
             return(
               <div key={key} onClick={()=>go("workout-exercise",{key,name:exName})}
                 style={{display:"flex",justifyContent:"space-between",alignItems:"center",paddingBottom:12,marginBottom:12,borderBottom:`1px solid ${T.div}`,cursor:"pointer"}}>
@@ -733,7 +879,7 @@ function WorkoutHome(){
                   <div style={{fontFamily:"'Barlow Condensed',sans-serif",fontWeight:700,fontSize:13,textTransform:"uppercase"}}>{key.replace(/_/g," ")}</div>
                   <div style={{color:T.sub,fontSize:11,marginTop:2}}>{pr.weight}kg × {pr.reps} · ~{Math.round(pr.rm)}kg</div>
                 </div>
-                <div style={{fontFamily:"'Barlow Condensed',sans-serif",fontWeight:900,fontSize:12,color:rank.c}}>{rank.n}</div>
+                <div style={{fontFamily:"'Barlow Condensed',sans-serif",fontWeight:900,fontSize:12,color:showRankBadge?rank.c:T.sub}}>{showRankBadge?rank.n:"—"}</div>
               </div>
             );
           })}
@@ -743,10 +889,80 @@ function WorkoutHome(){
   );
 }
 
+
+// ─── RANK EXPLAINER ───────────────────────────────────────────────────────────
+function RankExplainerScreen(){
+  const {T,bw,userDOB,prs}=useContext(Ctx);
+  const H={fontFamily:"'Barlow Condensed',sans-serif",fontWeight:900,textTransform:"uppercase"};
+  const age=computeAge(userDOB);
+
+  return(
+    <div style={{padding:"24px 20px"}}>
+      <PageHeader title="STRENGTH RANKS"/>
+
+      {/* Tier key */}
+      <div style={{marginBottom:24}}>
+        <div style={{...H,fontSize:10,color:T.sub,letterSpacing:"0.12em",marginBottom:12}}>TIER SYSTEM</div>
+        {SL_TIERS.map(tier=>(
+          <div key={tier.n} style={{display:"flex",justifyContent:"space-between",alignItems:"baseline",marginBottom:10,paddingBottom:10,borderBottom:`1px solid ${T.div}`}}>
+            <div style={{display:"flex",alignItems:"center",gap:10}}>
+              <div style={{width:8,height:8,borderRadius:"50%",background:tier.c,flexShrink:0}}/>
+              <div style={{...H,fontSize:15,color:tier.c}}>{tier.n}</div>
+            </div>
+            <div style={{textAlign:"right"}}>
+              <div style={{fontFamily:"'Barlow Condensed',sans-serif",fontWeight:700,fontSize:12,color:T.text}}>{tier.ratio}</div>
+              <div style={{color:T.sub,fontSize:10,marginTop:1}}>{tier.desc}</div>
+            </div>
+          </div>
+        ))}
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline",marginBottom:10}}>
+          <div style={{display:"flex",alignItems:"center",gap:10}}>
+            <div style={{width:8,height:8,borderRadius:"50%",background:"#4B5563",flexShrink:0}}/>
+            <div style={{...H,fontSize:15,color:"#4B5563"}}>UNTRAINED</div>
+          </div>
+          <div style={{color:T.sub,fontSize:10}}>below beginner standards</div>
+        </div>
+      </div>
+
+      {/* All logged exercises with their rank */}
+      <div style={{...H,fontSize:10,color:T.sub,letterSpacing:"0.12em",marginBottom:12}}>YOUR EXERCISES · AGE {age} · {bw}kg</div>
+      {Object.entries(prs).length===0&&(
+        <div style={{color:T.sub,fontSize:12}}>No exercises logged yet. Complete a workout to see your ranks.</div>
+      )}
+      {Object.entries(prs).map(([key,pr])=>{
+        const name=key.replace(/_/g," ");
+        const rank=getUniversalRank(name,pr.rm,bw,userDOB);
+        return(
+          <div key={key} style={{paddingBottom:10,marginBottom:10,borderBottom:`1px solid ${T.div}`}}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:3}}>
+              <div style={{...H,fontSize:14,textTransform:"uppercase"}}>{name}</div>
+              <div style={{...H,fontSize:14,color:rank.c}}>{rank.n}</div>
+            </div>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+              <div style={{color:T.sub,fontSize:11}}>{rank.desc}</div>
+              <div style={{color:T.sub,fontSize:10,marginLeft:8,flexShrink:0}}>~{Math.round(pr.rm)}kg 1RM</div>
+            </div>
+            {rank.next&&<div style={{color:"#444",fontSize:10,marginTop:2}}>Next tier: {rank.next}kg</div>}
+          </div>
+        );
+      })}
+
+      <div style={{...H,fontSize:10,color:"#333",letterSpacing:"0.1em",marginTop:16,lineHeight:1.6}}>
+        Compound lifts use StrengthLevel.com data (153M+ lifts). Isolation exercises use category-specific bodyweight ratios. All adjusted for age {age}.
+      </div>
+    </div>
+  );
+}
+
 // ─── EDIT TEMPLATES ───────────────────────────────────────────────────────────
 function EditTemplates(){
   const {T,templates,saveTemplates,go}=useContext(Ctx);
   const [selectedId,setSelectedId]=useState(null);
+  const [editExIdx,setEditExIdx]=useState(null);
+  const [exBuf,setExBuf]=useState({});
+  const [dragIdx,setDragIdx]=useState(null);
+  const [dragOverIdx,setDragOverIdx]=useState(null);
+  const dragListRef=React.useRef(null);
   const H={fontFamily:"'Barlow Condensed',sans-serif",fontWeight:900,textTransform:"uppercase"};
 
   const updateTemplate=async updated=>saveTemplates(templates.map(t=>t.id===updated.id?updated:t));
@@ -756,9 +972,6 @@ function EditTemplates(){
   if(selectedId){
     const tmpl=templates.find(t=>t.id===selectedId);
     if(!tmpl){setSelectedId(null);return null;}
-
-    const [editExIdx,setEditExIdx]=useState(null);
-    const [exBuf,setExBuf]=useState({});
 
     const saveExEdit=async()=>{
       await updateTemplate({...tmpl,exercises:tmpl.exercises.map((ex,i)=>i===editExIdx?{...ex,...exBuf}:ex)});
@@ -770,6 +983,30 @@ function EditTemplates(){
       const updated={...tmpl,exercises:[...tmpl.exercises,newEx]};
       await updateTemplate(updated);
       setEditExIdx(tmpl.exercises.length);setExBuf({name:"New Exercise",sets:"3",targetReps:""});
+    };
+
+    const handleTouchMove=e=>{
+      if(dragIdx===null)return;
+      const touch=e.touches[0];
+      const rows=dragListRef.current?.querySelectorAll('[data-drag-row]');
+      if(!rows)return;
+      let best=dragIdx,bestDist=Infinity;
+      rows.forEach((row,i)=>{
+        const rect=row.getBoundingClientRect();
+        const mid=rect.top+rect.height/2;
+        const dist=Math.abs(touch.clientY-mid);
+        if(dist<bestDist){bestDist=dist;best=i;}
+      });
+      setDragOverIdx(best);
+    };
+    const handleTouchEnd=async()=>{
+      if(dragIdx!==null&&dragOverIdx!==null&&dragIdx!==dragOverIdx){
+        const exs=[...tmpl.exercises];
+        const[moved]=exs.splice(dragIdx,1);
+        exs.splice(dragOverIdx,0,moved);
+        await updateTemplate({...tmpl,exercises:exs});
+      }
+      setDragIdx(null);setDragOverIdx(null);
     };
 
     return(
@@ -789,9 +1026,13 @@ function EditTemplates(){
             style={{flex:1.5}}/>
         </div>
 
-        {/* Exercise list */}
+        {/* Exercise list — draggable */}
+        <div ref={dragListRef} onTouchMove={handleTouchMove} onTouchEnd={handleTouchEnd}>
         {tmpl.exercises.map((ex,i)=>(
-          <div key={ex.id||i}>
+          <div key={ex.id||i} data-drag-row="true"
+            style={{opacity:dragIdx===i?0.3:1,background:dragOverIdx===i&&dragIdx!==null&&dragIdx!==i?"#1E1E1E":"transparent",
+              borderLeft:dragOverIdx===i&&dragIdx!==null&&dragIdx!==i?"2px solid #39FF14":"2px solid transparent",
+              transition:"background 0.1s,border-color 0.1s"}}>
             {editExIdx===i?(
               <div style={{background:T.inp,padding:"12px",marginBottom:8}}>
                 <Inp placeholder="Exercise name" value={exBuf.name!==undefined?exBuf.name:ex.name}
@@ -816,9 +1057,12 @@ function EditTemplates(){
               </div>
             ):(
               <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",
-                paddingBottom:10,marginBottom:10,borderBottom:`1px solid ${T.div}`,cursor:"pointer"}}
-                onClick={()=>{setEditExIdx(i);setExBuf({name:ex.name,sets:ex.sets,targetReps:ex.targetReps});}}>
-                <div>
+                paddingBottom:10,marginBottom:10,borderBottom:`1px solid ${T.div}`}}>
+                {/* Drag handle */}
+                <div onTouchStart={()=>{setDragIdx(i);setDragOverIdx(i);}}
+                  style={{padding:"0 12px 0 0",color:"#444",fontSize:20,cursor:"grab",userSelect:"none",flexShrink:0,lineHeight:1,touchAction:"none"}}>≡</div>
+                <div style={{flex:1,cursor:"pointer"}}
+                  onClick={()=>{setEditExIdx(i);setExBuf({name:ex.name,sets:ex.sets,targetReps:ex.targetReps});}}>
                   <div style={{...H,fontSize:16}}>{ex.name}</div>
                   <div style={{color:T.sub,fontSize:11,marginTop:2}}>{ex.sets} × {ex.targetReps||"∞"}</div>
                 </div>
@@ -831,6 +1075,7 @@ function EditTemplates(){
             )}
           </div>
         ))}
+        </div>
         <button onClick={addEx}
           style={{background:"none",border:"none",color:T.sub,cursor:"pointer",...H,fontSize:11,letterSpacing:"0.06em",paddingLeft:0,marginTop:4}}>
           + ADD EXERCISE
@@ -1129,6 +1374,7 @@ function ProgressTracker(){
           {exercises.map(ex=>{
             const pr=prs[ex.key];
             const rank=pr?getExerciseRank(ex.name,pr.rm,bw,userDOB):null;
+            const showRank=rank&&rank.source==="sl";
             return(
               <div key={ex.key} onClick={()=>go("workout-exercise",{key:ex.key,name:ex.name})}
                 style={{display:"flex",justifyContent:"space-between",alignItems:"center",
@@ -1287,6 +1533,30 @@ function ExerciseProgress(){
           <div style={{color:T.sub,fontSize:11,marginTop:2}}>{projDate}</div>
         </div>
       )}
+      {/* All sessions — all sets including fails */}
+      {workoutLogs.filter(log=>log.exerciseNames&&Object.values(log.exerciseNames).some(n=>n===name)).sort((a,b)=>new Date(b.date)-new Date(a.date)).slice(0,12).map(log=>{
+        const eid=Object.keys(log.exerciseNames||{}).find(k=>log.exerciseNames[k]===name);
+        const allSets=(log.sets?.[eid]||[]);
+        if(!allSets.length)return null;
+        return(
+          <div key={log.id} style={{paddingBottom:10,marginBottom:10,borderBottom:`1px solid ${T.div}`}}>
+            <div style={{...H,fontSize:10,color:T.sub,marginBottom:5}}>{new Date(log.date).toLocaleDateString("en-GB",{day:"numeric",month:"short",year:"numeric"})}</div>
+            {allSets.map((set,i)=>{
+              const hasBoth=set.weight&&set.reps;
+              const fail=set.weight&&!set.reps;
+              return(
+                <div key={i} style={{display:"flex",gap:10,alignItems:"center",marginBottom:3}}>
+                  <span style={{...H,fontSize:9,color:T.sub,width:12}}>{i+1}</span>
+                  {hasBoth&&<span style={{fontFamily:"'Barlow Condensed',sans-serif",fontWeight:700,fontSize:13}}>{set.weight}kg × {set.reps}</span>}
+                  {fail&&<span style={{fontFamily:"'Barlow Condensed',sans-serif",fontWeight:700,fontSize:13,color:"#FF3B5C"}}>{set.weight}kg — FAIL</span>}
+                  {!hasBoth&&!fail&&<span style={{color:T.sub,fontSize:11}}>—</span>}
+                  {set.rpe&&hasBoth&&<span style={{color:T.sub,fontSize:11}}>RPE {set.rpe}</span>}
+                </div>
+              );
+            })}
+          </div>
+        );
+      })}
       {data.length>1?(
         <div style={{background:T.card,borderRadius:0,padding:"18px 8px 10px"}}>
           <div style={{...H,fontSize:10,color:"#555",paddingLeft:10,marginBottom:8,letterSpacing:"0.1em"}}>AVG WEIGHT / SESSION (kg)</div>
@@ -1365,7 +1635,7 @@ const DEFAULT_TYPES=[
 ];
 
 function BarberScreen(){
-  const {T,barberDays,saveBarberDays,barberIncome,saveBarberIncome}=useContext(Ctx);
+  const {T,barberDays,saveBarberDays,barberIncome,saveBarberIncome,apiKey}=useContext(Ctx);
 
   // Rate increase trigger: 2 consecutive complete months at 95%+
   const rateAlert=(()=>{
@@ -1435,13 +1705,9 @@ function BarberScreen(){
         rateAlert:rateAlert?{month1:rateAlert[1],month2:rateAlert[0]}:null
       });
 
-      const resp=await fetch("https://api.anthropic.com/v1/messages",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({
-        model:"claude-sonnet-4-20250514",max_tokens:800,
-        system:"You are a barbershop scheduling analyst. Return ONLY a valid JSON array of 3-5 insights. Each: {type:'extend_earlier'|'extend_later'|'cut_hours'|'warning'|'positive'|'trend', title:'max 5 words', body:'1-2 sentences with exact numbers. For hour extension: say which days, which direction, and WHY based on first/last slot fill rates. Be specific and direct.'}. Priorities: (1) if firstFillPct is 80%+ on any day, recommend starting earlier on that day; (2) if lastFillPct is 80%+ on any day, recommend ending later; (3) if firstFillPct or lastFillPct is <30%, recommend cutting those hours; (4) trend direction; (5) which days are most vs least productive. No markdown, no preamble.",
+      const txt=await aiPost(apiKey,{max_tokens:800,system:"You are a barbershop scheduling analyst. Return ONLY a valid JSON array of 3-5 insights. Each: {type:'extend_earlier'|'extend_later'|'cut_hours'|'warning'|'positive'|'trend', title:'max 5 words', body:'1-2 sentences with exact numbers. For hour extension: say which days, which direction, and WHY based on first/last slot fill rates. Be specific and direct.'}. Priorities: (1) if firstFillPct is 80%+ on any day, recommend starting earlier on that day; (2) if lastFillPct is 80%+ on any day, recommend ending later; (3) if firstFillPct or lastFillPct is <30%, recommend cutting those hours; (4) trend direction; (5) which days are most vs least productive. No markdown, no preamble.",
         messages:[{role:"user",content:"Analyse my barbershop schedule data: "+payload}]
-      })});
-      const data=await resp.json();
-      const txt=(data.content||[]).filter(b=>b.type==="text").map(b=>b.text).join("");
+      });
       setBarberAiInsights(JSON.parse(txt.replace(/```json|```/g,"").trim()));
     }catch{setBarberAiInsights([{type:"warning",title:"Analysis failed",body:"Could not reach AI. Try again."}]);}
     setBarberAiLoading(false);
@@ -1913,7 +2179,7 @@ function BarberScreen(){
 
 // ─── AI WEEKLY SUMMARY COMPONENT ─────────────────────────────────────────────
 function AiWeeklySummary({weekData,morningLogs,nightLogs,workoutLogs}){
-  const {T}=useContext(Ctx);
+  const {T,apiKey}=useContext(Ctx);
   const [summary,setSummary]=useState(null);
   const [loading,setLoading]=useState(false);
   const H={fontFamily:"'Barlow Condensed',sans-serif",fontWeight:900,textTransform:"uppercase"};
@@ -1921,13 +2187,9 @@ function AiWeeklySummary({weekData,morningLogs,nightLogs,workoutLogs}){
   const run=async()=>{
     setLoading(true);
     try{
-      const resp=await fetch("https://api.anthropic.com/v1/messages",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({
-        model:"claude-sonnet-4-20250514",max_tokens:400,
-        system:"You are a blunt personal performance analyst. Given a week of data, write 3-4 sentences about what the numbers actually show — not what the person wants to hear. No encouragement, no padding. Just the data and what it means. Be specific with numbers.",
+      const txt=await aiPost(apiKey,{max_tokens:400,system:"You are a blunt personal performance analyst. Given a week of data, write 3-4 sentences about what the numbers actually show — not what the person wants to hear. No encouragement, no padding. Just the data and what it means. Be specific with numbers.",
         messages:[{role:"user",content:"Week data: "+JSON.stringify(weekData)+" Morning logs: "+JSON.stringify(morningLogs.map(l=>({d:l.date,s:l.sleep,e:l.energy,m:l.mood})))+" Night logs: "+JSON.stringify(nightLogs.map(l=>({d:l.date,e:l.energy,m:l.mood,w:l.win,f:l.fail})))+" Workouts: "+JSON.stringify(workoutLogs.map(l=>({d:l.date.slice(0,10),diff:l.difficulty})))}]
-      })});
-      const data=await resp.json();
-      const txt=(data.content||[]).filter(b=>b.type==="text").map(b=>b.text).join("");
+      });
       setSummary(txt);
     }catch{setSummary("Could not reach AI. Try again.");}
     setLoading(false);
@@ -1948,7 +2210,7 @@ function AiWeeklySummary({weekData,morningLogs,nightLogs,workoutLogs}){
 }
 
 function DailyScreen(){
-  const {T,morningLogs,nightLogs,saveMorningLogs,saveNightLogs,go,workoutLogs,barberDays,weeklyReviews,saveWeeklyReviews,habits,saveHabits}=useContext(Ctx);
+  const {T,morningLogs,nightLogs,saveMorningLogs,saveNightLogs,go,workoutLogs,barberDays,weeklyReviews,saveWeeklyReviews,habits,saveHabits,apiKey}=useContext(Ctx);
   const [view,setView]=useState("home"); // "home"|"log"|"history"
 
   // Compute current week key for weekly review
@@ -2365,7 +2627,7 @@ function DailyScreen(){
 
 // ─── HEALTH HEALTH ───────────────────────────────────────────────────────────────────
 function HealthScreen(){
-  const {T,morningLogs,nightLogs,workoutLogs,goals}=useContext(Ctx);
+  const {T,morningLogs,nightLogs,workoutLogs,goals,apiKey}=useContext(Ctx);
   const [period,setPeriod]=useState(30);
   const [insights,setInsights]=useState(null);
   const [aiLoading,setAiLoading]=useState(false);
@@ -2629,13 +2891,9 @@ function HealthScreen(){
         moodVsBarberDayCompletion:moodVsBarberDayCompletion,
         goalPace:goalPace
       });
-      const resp=await fetch("https://api.anthropic.com/v1/messages",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({
-        model:"claude-sonnet-4-20250514",max_tokens:1800,
-        system:"You are a personal performance analyst. Return ONLY a valid JSON array of 8-10 insights, no duplicates. Each: {type:'correlation'|'trend'|'warning'|'positive'|'calendar'|'workout'|'goal', title:'max 5 words', body:'1-2 sentences, exact numbers only — sleep hours, mood scores, percentages, weights, RPE.'}. Cover in priority order: (1) mood vs session difficulty — does mood score predict how hard the session feels?, (2) mood vs general productivity — at what mood level does overall calendar completion drop?, (3) mood vs school/study event completion specifically — is there a threshold?, (4) mood vs completion on workout days — does mood affect how much gets done after training?, (5) mood vs completion on barbershop days — does mood affect post-work productivity?, (6) sleep vs session difficulty — does low sleep make sessions harder or weaker?, (7) for each event in sleepVsEventCompletion find the actual sleep threshold where completion drops — do not assume 7h for all, name the event and threshold, (8) which exercises show biggest weight drop or RPE increase on low-sleep days, (9) session difficulty → next-day calendar completion, (10) goal pace — look at each goal's pctDone and daysLeft. If any goal is ahead of pace to hit the Dec 31 2026 target early, do NOT just say 'consider raising it' — tell the user they are sandbagging and their target is too soft, then give a specific significantly higher number they should actually be aiming for. Be direct, no softening.",
+      const txt=await aiPost(apiKey,{max_tokens:1800,system:"You are a personal performance analyst. Return ONLY a valid JSON array of 8-10 insights, no duplicates. Each: {type:'correlation'|'trend'|'warning'|'positive'|'calendar'|'workout'|'goal', title:'max 5 words', body:'1-2 sentences, exact numbers only — sleep hours, mood scores, percentages, weights, RPE.'}. Cover in priority order: (1) mood vs session difficulty — does mood score predict how hard the session feels?, (2) mood vs general productivity — at what mood level does overall calendar completion drop?, (3) mood vs school/study event completion specifically — is there a threshold?, (4) mood vs completion on workout days — does mood affect how much gets done after training?, (5) mood vs completion on barbershop days — does mood affect post-work productivity?, (6) sleep vs session difficulty — does low sleep make sessions harder or weaker?, (7) for each event in sleepVsEventCompletion find the actual sleep threshold where completion drops — do not assume 7h for all, name the event and threshold, (8) which exercises show biggest weight drop or RPE increase on low-sleep days, (9) session difficulty → next-day calendar completion, (10) goal pace — look at each goal's pctDone and daysLeft. If any goal is ahead of pace to hit the Dec 31 2026 target early, do NOT just say 'consider raising it' — tell the user they are sandbagging and their target is too soft, then give a specific significantly higher number they should actually be aiming for. Be direct, no softening.",
         messages:[{role:"user",content:"Analyze: "+payload}]
-      })});
-      const data=await resp.json();
-      const txt=(data.content||[]).filter(b=>b.type==="text").map(b=>b.text).join("");
+      });
       setInsights(JSON.parse(txt.replace(/```json|```/g,"").trim()));
     }catch(e){setInsights([{type:"warning",title:"Analysis failed",body:"Could not reach the AI. Try again."}]);}
     setAiLoading(false);
@@ -2647,13 +2905,9 @@ function HealthScreen(){
     setSchedLoading(true);
     try{
       const pairs=ml.map(l=>({date:l.date,sleep:l.sleep,energy:l.energy,mood:l.mood}));
-      const resp=await fetch("https://api.anthropic.com/v1/messages",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({
-        model:"claude-sonnet-4-20250514",max_tokens:500,
-        system:"You are a performance analyst. Based on mood/energy/sleep patterns, give 3 specific schedule suggestions in plain text — e.g. 'Schedule hard cognitive work (study, EJ prep) in the morning on days after 7h+ sleep based on your energy data.' Be specific with numbers from the data. No padding.",
+      const txt=await aiPost(apiKey,{max_tokens:500,system:"You are a performance analyst. Based on mood/energy/sleep patterns, give 3 specific schedule suggestions in plain text — e.g. 'Schedule hard cognitive work (study, EJ prep) in the morning on days after 7h+ sleep based on your energy data.' Be specific with numbers from the data. No padding.",
         messages:[{role:"user",content:"Analyse patterns and suggest optimal schedule windows: "+JSON.stringify(pairs)}]
-      })});
-      const data=await resp.json();
-      const txt=(data.content||[]).filter(b=>b.type==="text").map(b=>b.text).join("");
+      });
       setSchedSuggestions(txt);
     }catch{setSchedSuggestions("Could not reach AI.");}
     setSchedLoading(false);
@@ -2816,10 +3070,156 @@ function AddEvent({saveComingSoon,comingSoon}){
   );
 }
 
+
+// ─── PHYSIQUE SCREEN ──────────────────────────────────────────────────────────
+function PhysiqueScreen(){
+  const {T,morningLogs,workoutLogs,bw,saveBw,apiKey}=useContext(Ctx);
+  const [phase,setPhase]=useState(()=>{try{const v=localStorage.getItem('k3_phase');return v?JSON.parse(v):{type:'bulk',start:todayStr(),target:75,startWeight:65};}catch{return{type:'bulk',start:todayStr(),target:75,startWeight:65};}});
+  const [weighIns,setWeighIns]=useState(()=>{try{const v=localStorage.getItem('k3_weighins');return v?JSON.parse(v):[];}catch{return [];}});
+  const [newWeight,setNewWeight]=useState("");
+  const [aiAnalysis,setAiAnalysis]=useState(null);
+  const [aiLoading,setAiLoading]=useState(false);
+  const [editPhase,setEditPhase]=useState(false);
+  const H={fontFamily:"'Barlow Condensed',sans-serif",fontWeight:900,textTransform:"uppercase"};
+
+  const savePhase=v=>{setPhase(v);localStorage.setItem('k3_phase',JSON.stringify(v));};
+  const saveWeighIns=v=>{setWeighIns(v);localStorage.setItem('k3_weighins',JSON.stringify(v));};
+
+  const logWeight=()=>{
+    if(!newWeight)return;
+    const entry={date:todayStr(),weight:parseFloat(newWeight)};
+    const updated=[...weighIns.filter(w=>w.date!==todayStr()),entry].sort((a,b)=>a.date.localeCompare(b.date));
+    saveWeighIns(updated);setNewWeight("");
+  };
+
+  // Progress toward phase target
+  const latestWeight=weighIns.length?weighIns[weighIns.length-1].weight:phase.startWeight;
+  const phaseProgress=phase.type==='bulk'
+    ?Math.min(100,Math.round((latestWeight-phase.startWeight)/(phase.target-phase.startWeight)*100))
+    :Math.min(100,Math.round((phase.startWeight-latestWeight)/(phase.startWeight-phase.target)*100));
+  const progressColor=phaseProgress>=100?"#39FF14":phaseProgress>=60?"#FFD700":"#7DF9FF";
+
+  const runAnalysis=async()=>{
+    if(!apiKey){setAiAnalysis("Add your Anthropic API key in ME → Settings to use AI analysis.");return;}
+    setAiLoading(true);
+    try{
+      const recentWeigh=weighIns.slice(-14).map(w=>({d:w.date,kg:w.weight}));
+      const recentSleep=morningLogs.slice(-14).map(l=>({d:l.date,sleep:l.sleep,energy:l.energy,hrv:l.hrv}));
+      const recentWO=workoutLogs.slice(-10).map(l=>({d:l.date.slice(0,10),diff:l.difficulty}));
+      const txt=await aiPost(apiKey,{max_tokens:500,
+        system:"You are a physique and performance coach. Analyse the data and give 4-5 blunt, specific observations about: (1) weight trajectory vs the phase target, (2) whether sleep/HRV/energy quality is supporting the phase goals, (3) training load alignment with phase, (4) one concrete action to improve. No padding, specific numbers only.",
+        messages:[{role:"user",content:"Phase: "+JSON.stringify(phase)+" Current weight: "+latestWeight+"kg. Recent weigh-ins: "+JSON.stringify(recentWeigh)+" Sleep/energy: "+JSON.stringify(recentSleep)+" Workouts: "+JSON.stringify(recentWO)}]
+      });
+      setAiAnalysis(txt);
+    }catch(e){setAiAnalysis("Analysis failed: "+e.message);}
+    setAiLoading(false);
+  };
+
+  return(
+    <div style={{padding:"24px 20px"}}>
+      <PageHeader title="PHYSIQUE"/>
+
+      {/* Phase tracker */}
+      <div style={{marginBottom:24}}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
+          <div style={{...H,fontSize:10,color:T.sub,letterSpacing:"0.12em"}}>CURRENT PHASE</div>
+          <button onClick={()=>setEditPhase(!editPhase)} style={{background:"none",border:"none",color:T.sub,cursor:"pointer",...H,fontSize:10,letterSpacing:"0.06em"}}>EDIT</button>
+        </div>
+        {editPhase?(
+          <div style={{background:T.card,padding:"16px",marginBottom:12}}>
+            <div style={{display:"flex",gap:6,marginBottom:12}}>
+              {["bulk","cut","maintain"].map(p=>(
+                <button key={p} onClick={()=>savePhase({...phase,type:p})}
+                  style={{flex:1,padding:"8px 0",background:phase.type===p?T.text:"transparent",color:phase.type===p?T.bg:T.sub,border:`1px solid ${phase.type===p?T.text:"#222"}`,borderRadius:0,...H,fontSize:11,cursor:"pointer"}}>
+                  {p.toUpperCase()}
+                </button>
+              ))}
+            </div>
+            <div style={{display:"flex",gap:8,marginBottom:8}}>
+              <div style={{flex:1}}>
+                <div style={{...H,fontSize:9,color:T.sub,marginBottom:3}}>START WEIGHT kg</div>
+                <input value={phase.startWeight} onChange={e=>savePhase({...phase,startWeight:parseFloat(e.target.value)||phase.startWeight})} type="number"
+                  style={{background:T.inp,border:"none",borderBottom:"1px solid #333",borderRadius:0,padding:"8px 4px",color:T.text,...H,fontSize:13,outline:"none",width:"100%"}}/>
+              </div>
+              <div style={{flex:1}}>
+                <div style={{...H,fontSize:9,color:T.sub,marginBottom:3}}>TARGET kg</div>
+                <input value={phase.target} onChange={e=>savePhase({...phase,target:parseFloat(e.target.value)||phase.target})} type="number"
+                  style={{background:T.inp,border:"none",borderBottom:"1px solid #333",borderRadius:0,padding:"8px 4px",color:T.text,...H,fontSize:13,outline:"none",width:"100%"}}/>
+              </div>
+              <div style={{flex:1}}>
+                <div style={{...H,fontSize:9,color:T.sub,marginBottom:3}}>START DATE</div>
+                <input value={phase.start} onChange={e=>savePhase({...phase,start:e.target.value})} type="date"
+                  style={{background:T.inp,border:"none",borderBottom:"1px solid #333",borderRadius:0,padding:"8px 4px",color:T.text,...H,fontSize:11,outline:"none",width:"100%"}}/>
+              </div>
+            </div>
+            <button onClick={()=>setEditPhase(false)} style={{background:"none",border:"none",color:T.sub,cursor:"pointer",...H,fontSize:10,letterSpacing:"0.06em"}}>DONE</button>
+          </div>
+        ):(
+          <>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline",marginBottom:8}}>
+              <div style={{...H,fontSize:28,color:phase.type==="bulk"?"#FFD700":phase.type==="cut"?"#FF3B5C":"#39FF14"}}>{phase.type.toUpperCase()}</div>
+              <div style={{...H,fontSize:14,color:T.sub}}>{phase.startWeight}kg → {phase.target}kg</div>
+            </div>
+            <div style={{...H,fontSize:13,marginBottom:8}}>Currently: {latestWeight}kg · {Math.abs(latestWeight-phase.target).toFixed(1)}kg {latestWeight<phase.target?"to go":"over target"}</div>
+            <div style={{height:3,background:T.div,overflow:"hidden",marginBottom:4}}>
+              <div style={{width:"100%",height:"100%",background:`linear-gradient(to right,#5C0000,#CC0000,#FFD700,#39FF14)`,transform:`translateX(${phaseProgress-100}%)`,transition:"transform 0.4s ease"}}/>
+            </div>
+            <div style={{...H,fontSize:10,color:progressColor}}>{phaseProgress}% complete</div>
+          </>
+        )}
+      </div>
+
+      {/* Daily weigh-in */}
+      <div style={{marginBottom:24}}>
+        <div style={{...H,fontSize:10,color:T.sub,letterSpacing:"0.12em",marginBottom:10}}>MORNING WEIGH-IN</div>
+        <div style={{display:"flex",gap:8}}>
+          <input value={newWeight} onChange={e=>setNewWeight(e.target.value)} placeholder="kg" type="number" step="0.1"
+            style={{flex:1,background:T.inp,border:"none",borderBottom:"1px solid #333",borderRadius:0,padding:"12px 8px",color:T.text,...H,fontSize:18,outline:"none"}}/>
+          <button onClick={logWeight} style={{padding:"0 20px",background:T.text,color:T.bg,border:"none",borderRadius:0,...H,fontSize:12,cursor:"pointer"}}>LOG</button>
+        </div>
+      </div>
+
+      {/* Weight history */}
+      {weighIns.length>0&&(
+        <div style={{marginBottom:24}}>
+          <div style={{...H,fontSize:10,color:T.sub,letterSpacing:"0.12em",marginBottom:10}}>HISTORY</div>
+          {[...weighIns].reverse().slice(0,10).map(w=>(
+            <div key={w.date} style={{display:"flex",justifyContent:"space-between",alignItems:"center",paddingBottom:8,marginBottom:8,borderBottom:`1px solid ${T.div}`}}>
+              <div style={{color:T.sub,fontSize:12}}>{w.date}</div>
+              <div style={{display:"flex",gap:12,alignItems:"center"}}>
+                <div style={{...H,fontSize:16}}>{w.weight}kg</div>
+                <button onClick={()=>saveWeighIns(weighIns.filter(x=>x.date!==w.date))} style={{background:"none",border:"none",color:"#333",cursor:"pointer",fontSize:14}}>×</button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Progress graphic placeholder */}
+      <div style={{marginBottom:24,border:"1px solid #222",padding:"24px",textAlign:"center",minHeight:120,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center"}}>
+        <div style={{...H,fontSize:10,color:"#333",letterSpacing:"0.12em",marginBottom:6}}>PROGRESS GRAPHIC</div>
+        <div style={{color:"#333",fontSize:11}}>Your custom physique graphic goes here</div>
+      </div>
+
+      {/* AI analysis */}
+      <div style={{...H,fontSize:10,color:T.sub,letterSpacing:"0.12em",marginBottom:10}}>AI PHYSIQUE ANALYSIS</div>
+      <button onClick={runAnalysis} disabled={aiLoading}
+        style={{background:"transparent",border:"1px solid #333",borderRadius:0,color:aiLoading?T.sub:T.text,padding:"12px 20px",width:"100%",...H,fontSize:12,letterSpacing:"0.08em",cursor:"pointer",marginBottom:aiAnalysis?12:0}}>
+        {aiLoading?"ANALYSING…":"ANALYSE PROGRESS"}
+      </button>
+      {aiAnalysis&&(
+        <div style={{borderLeft:"2px solid #7DF9FF",paddingLeft:12,paddingTop:4,paddingBottom:4}}>
+          <div style={{fontSize:13,color:T.sub,lineHeight:1.7,whiteSpace:"pre-line"}}>{aiAnalysis}</div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── GOALS ────────────────────────────────────────────────────────────────────
 // ─── QUOTE VAULT SCREEN ───────────────────────────────────────────────────────
 function QuoteVaultScreen(){
-  const {T,quotes,saveQuotes}=useContext(Ctx);
+  const {T,quotes,saveQuotes,apiKey}=useContext(Ctx);
   const [text,setText]=useState("");const [author,setAuthor]=useState("");
   const [loading,setLoading]=useState(false);const [aiQuotes,setAiQuotes]=useState([]);
   const H={fontFamily:"'Barlow Condensed',sans-serif",fontWeight:900,textTransform:"uppercase"};
@@ -2827,13 +3227,9 @@ function QuoteVaultScreen(){
   const getSuggestions=async(q)=>{
     setLoading(true);
     try{
-      const resp=await fetch("https://api.anthropic.com/v1/messages",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({
-        model:"claude-sonnet-4-20250514",max_tokens:600,
-        system:"Suggest quotes matching the vibe and idea of a given quote. Return ONLY a JSON array of 2-3 objects: [{text,author}]. No markdown. Pull from any tradition — philosophy, religion, fashion, sport, literature, business. Match the energy precisely.",
+      const txt=await aiPost(apiKey,{max_tokens:600,system:"Suggest quotes matching the vibe and idea of a given quote. Return ONLY a JSON array of 2-3 objects: [{text,author}]. No markdown. Pull from any tradition — philosophy, religion, fashion, sport, literature, business. Match the energy precisely.",
         messages:[{role:"user",content:"Give me 2-3 quotes that match this vibe: '"+q.text+"' by "+q.author}]
-      })});
-      const data=await resp.json();
-      const txt=(data.content||[]).filter(b=>b.type==="text").map(b=>b.text).join("");
+      });
       setAiQuotes(JSON.parse(txt.replace(/```json|```/g,"").trim()));
     }catch{}
     setLoading(false);
@@ -3226,10 +3622,12 @@ function FinancialsScreen(){
 
 // ─── ME SCREEN ────────────────────────────────────────────────────────────────
 function MeScreen(){
-  const {T,userName,saveUserName,userDOB,bw,morningLogs,nightLogs,workoutLogs,barberDays,prs,weeklyReviews,soMeVideos,soMeFollowers,goals,go}=useContext(Ctx);
+  const {T,userName,saveUserName,userDOB,bw,morningLogs,nightLogs,workoutLogs,barberDays,prs,weeklyReviews,soMeVideos,soMeFollowers,goals,go,apiKey,saveApiKey}=useContext(Ctx);
   const H={fontFamily:"'Barlow Condensed',sans-serif",fontWeight:900,textTransform:"uppercase"};
   const [editingName,setEditingName]=useState(false);
   const [nameInput,setNameInput]=useState(userName);
+  const [showApiInput,setShowApiInput]=useState(false);
+  const [apiInput,setApiInput]=useState(apiKey||"");
   const age=computeAge(userDOB);
   const streak=computeStreak(morningLogs,nightLogs);
   const RANK_IDX={"UNTRAINED":0,"BEGINNER":1,"NOVICE":2,"INTERMEDIATE":3,"ADVANCED":4,"ELITE":5};
@@ -3290,12 +3688,34 @@ function MeScreen(){
       </div>
 
       <Divider/>
+      <NavRow label="PHYSIQUE" sub="Phase tracker · weigh-ins · AI analysis" onPress={()=>go("physique")} color="#FF6B35"/>
       <NavRow label="GOALS" sub={goals.length+" active goals"} onPress={()=>go("goals")} color="#FFD700"/>
-      <NavRow label="FINANCIALS" sub="Coming soon" onPress={()=>go("financials")} color="#39FF14"/>
+      <NavRow label="FINANCIALS" sub="Income · expenses · savings" onPress={()=>go("financials")} color="#39FF14"/>
       <NavRow label="SOCIAL MEDIA" sub={soMeVideos.length+" videos"+(latestFollowers?" · TT EN "+(latestFollowers.tiktokEN||latestFollowers.tiktok||0).toLocaleString()+" · TT DK "+(latestFollowers.tiktokDK||0).toLocaleString()+" · IG "+(latestFollowers.reels||0).toLocaleString():"")} onPress={()=>go("some")} color="#A78BFA"/>
       <NavRow label="QUOTE VAULT" sub="Quotes that shape the mentality" onPress={()=>go("quotes")} color="#7DF9FF"/>
       <Divider/>
 
+      {/* API Key settings */}
+      <div style={{marginBottom:20}}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
+          <div style={{...H,fontSize:10,color:T.sub,letterSpacing:"0.12em"}}>CLAUDE API KEY</div>
+          <div style={{display:"flex",gap:8,alignItems:"center"}}>
+            {apiKey&&<div style={{...H,fontSize:10,color:"#39FF14"}}>✓ SET</div>}
+            <button onClick={()=>setShowApiInput(!showApiInput)} style={{background:"none",border:"none",color:T.sub,cursor:"pointer",...H,fontSize:10,letterSpacing:"0.06em"}}>{showApiInput?"HIDE":"EDIT"}</button>
+          </div>
+        </div>
+        {showApiInput&&(
+          <div style={{display:"flex",gap:8}}>
+            <input value={apiInput} onChange={e=>setApiInput(e.target.value)} placeholder="sk-ant-..." type="password"
+              style={{flex:1,background:T.inp,border:"none",borderBottom:"1px solid #333",borderRadius:0,padding:"10px 8px",color:T.text,fontFamily:"'Barlow',sans-serif",fontSize:12,outline:"none"}}/>
+            <button onClick={async()=>{await saveApiKey(apiInput.trim());setShowApiInput(false);}}
+              style={{padding:"0 16px",background:T.text,color:T.bg,border:"none",borderRadius:0,...H,fontSize:11,cursor:"pointer"}}>SAVE</button>
+          </div>
+        )}
+        {!apiKey&&<div style={{color:"#FF3B5C",fontSize:10,marginTop:4,fontFamily:"'Barlow Condensed',sans-serif"}}>Required for all AI analysis features. Get yours at console.anthropic.com</div>}
+      </div>
+
+      <Divider/>
       <div style={{...H,fontSize:10,color:T.sub,letterSpacing:"0.12em",marginBottom:14}}>APP STATS</div>
       <div style={{display:"flex",flexWrap:"wrap",gap:10}}>
         {[["MORNING LOGS",morningLogs.length,"#7DF9FF"],["NIGHT LOGS",nightLogs.length,"#D0D0D0"],["WORKOUTS",workoutLogs.length,"#FF6B35"],["BARBER SESSIONS",barberDays.length,"#A78BFA"],["WEEKLY REVIEWS",weeklyReviews.length,"#FFD700"]].map(([l,v,c])=>(
@@ -3436,20 +3856,22 @@ export default function KataokaApp(){
   const [habits,setHabits]=useState({});
   const [hrvLogs,setHrvLogs]=useState([]);
   const [financeMonths,setFinanceMonths]=useState({});
+  const [appNotes,setAppNotes]=useState("");
+  const [apiKey,setApiKey]=useState("");
 
   useEffect(()=>{
     const load=async()=>{
-      const [t,wl,pr,bwks,bi,ml,nl,g,bwt,dp,bd,cs,dob,un,qt,wr,sv,sf,hb,hrv,fm]=await Promise.all([
+      const [t,wl,pr,bwks,bi,ml,nl,g,bwt,dp,bd,cs,dob,un,qt,wr,sv,sf,hb,hrv,fm,an,ak]=await Promise.all([
         S.get("templates"),S.get("workout_logs"),S.get("prs"),
         S.get("barber_weeks"),S.get("barber_income"),
         S.get("morning_logs"),S.get("night_logs"),
-        S.get("goals"),S.get("bodyweight"),S.get("dark"),S.get("barber_days"),S.get("coming_soon"),S.get("user_dob"),S.get("user_name"),S.get("quotes"),S.get("weekly_reviews"),S.get("some_videos"),S.get("some_followers"),S.get("habits"),S.get("hrv_logs"),S.get("finance_months"),
+        S.get("goals"),S.get("bodyweight"),S.get("dark"),S.get("barber_days"),S.get("coming_soon"),S.get("user_dob"),S.get("user_name"),S.get("quotes"),S.get("weekly_reviews"),S.get("some_videos"),S.get("some_followers"),S.get("habits"),S.get("hrv_logs"),S.get("finance_months"),S.get("app_notes"),S.get("api_key"),
       ]);
       if(t?.length)setTemplates(t);
       if(wl)setWorkoutLogs(wl);if(pr)setPrs(pr);
       if(bwks)setBarberWeeks(bwks);if(bi)setBarberIncome(bi);if(bd)setBarberDays(bd);
       if(ml)setMorningLogs(ml);if(nl)setNightLogs(nl);
-      if(g)setGoals(g);if(bwt)setBw(bwt);if(dp!==null)setDark(dp);if(cs)setComingSoon(cs);if(dob)setUserDOB(dob);if(un)setUserName(un);if(qt)setQuotes(qt);if(wr)setWeeklyReviews(wr);if(sv)setSoMeVideos(sv);if(sf)setSoMeFollowers(sf);if(hb)setHabits(hb);if(hrv)setHrvLogs(hrv);if(fm)setFinanceMonths(fm);
+      if(g)setGoals(g);if(bwt)setBw(bwt);if(dp!==null)setDark(dp);if(cs)setComingSoon(cs);if(dob)setUserDOB(dob);if(un)setUserName(un);if(qt)setQuotes(qt);if(wr)setWeeklyReviews(wr);if(sv)setSoMeVideos(sv);if(sf)setSoMeFollowers(sf);if(hb)setHabits(hb);if(hrv)setHrvLogs(hrv);if(fm)setFinanceMonths(fm);if(an)setAppNotes(an);if(ak)setApiKey(ak);
     };
     load();
     const link=document.createElement("link");
@@ -3490,6 +3912,8 @@ export default function KataokaApp(){
   const saveHabits=async v=>{setHabits(v);await S.set("habits",v);};
   const saveHrvLogs=async v=>{setHrvLogs(v);await S.set("hrv_logs",v);};
   const saveFinanceMonths=async v=>{setFinanceMonths(v);await S.set("finance_months",v);};
+  const saveAppNotes=async v=>{setAppNotes(v);await S.set("app_notes",v);};
+  const saveApiKey=async v=>{setApiKey(v);await S.set("api_key",v);};
 
   const checkPR=async(name,weight,reps)=>{
     const rm=epley(weight,reps);
@@ -3545,9 +3969,9 @@ export default function KataokaApp(){
   const ctx={T,dark,setDark,screen,screenData,go,back,tab,activeTab,
     templates,saveTemplates,workoutLogs,saveLogs,prs,checkPR,commitWorkout,bw,resetAllData,resetPRs,
     barberWeeks,saveBarberWeeks,barberIncome,saveBarberIncome,barberDays,saveBarberDays,
-    morningLogs,saveMorningLogs,nightLogs,saveNightLogs,goals,saveGoals,comingSoon,saveComingSoon,userDOB,saveDOB,bw,saveBw,userName,saveUserName,quotes,saveQuotes,weeklyReviews,saveWeeklyReviews,soMeVideos,saveSoMeVideos,soMeFollowers,saveSoMeFollowers,habits,saveHabits,hrvLogs,saveHrvLogs,financeMonths,saveFinanceMonths};
+    morningLogs,saveMorningLogs,nightLogs,saveNightLogs,goals,saveGoals,comingSoon,saveComingSoon,userDOB,saveDOB,bw,saveBw,userName,saveUserName,quotes,saveQuotes,weeklyReviews,saveWeeklyReviews,soMeVideos,saveSoMeVideos,soMeFollowers,saveSoMeFollowers,habits,saveHabits,hrvLogs,saveHrvLogs,financeMonths,saveFinanceMonths,appNotes,saveAppNotes,apiKey,saveApiKey};
 
-  const SCREENS={home:HomeScreen,workout:WorkoutHome,"workout-log":LogChoose,"workout-edit-templates":EditTemplates,"workout-templates":TemplatePick,"workout-active":ActiveWorkout,"workout-history":WorkoutHistory,"workout-session":WorkoutSession,"workout-progress":ProgressTracker,"workout-create":CreateTemplate,"workout-exercise":ExerciseProgress,barber:BarberScreen,daily:DailyScreen,health:HealthScreen,goals:GoalsScreen,me:MeScreen,quotes:QuoteVaultScreen,some:SoMeScreen,financials:FinancialsScreen};
+  const SCREENS={home:HomeScreen,workout:WorkoutHome,"workout-log":LogChoose,"workout-edit-templates":EditTemplates,"workout-ranks":RankExplainerScreen,"workout-templates":TemplatePick,"workout-active":ActiveWorkout,"workout-history":WorkoutHistory,"workout-session":WorkoutSession,"workout-progress":ProgressTracker,"workout-create":CreateTemplate,"workout-exercise":ExerciseProgress,barber:BarberScreen,daily:DailyScreen,health:HealthScreen,goals:GoalsScreen,me:MeScreen,quotes:QuoteVaultScreen,some:SoMeScreen,financials:FinancialsScreen,physique:PhysiqueScreen};
   const Screen=SCREENS[screen]||HomeScreen;
 
   const TABS=[{id:"home",icon:"⌂",label:"HOME"},{id:"workout",icon:"🏋️",label:"TRAIN"},{id:"barber",icon:"✂️",label:"BARBER"},{id:"daily",icon:"📋",label:"LOG"},{id:"me",icon:"◉",label:"ME"}];
