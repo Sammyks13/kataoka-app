@@ -3048,10 +3048,11 @@ function AddEvent({saveComingSoon,comingSoon}){
 // ─── PHYSIQUE SCREEN ──────────────────────────────────────────────────────────
 function PhysiqueScreen(){
   const {T,morningLogs,nightLogs,workoutLogs,bw,saveBw,apiKey}=useContext(Ctx);
+  const [physTab,setPhysTab]=useState("log");
   const [phase,setPhase]=useState(()=>{try{const v=localStorage.getItem('k3_phase');return v?JSON.parse(v):{type:'bulk',start:todayStr(),target:75,startWeight:65};}catch{return{type:'bulk',start:todayStr(),target:75,startWeight:65};}});
   const [weighIns,setWeighIns]=useState(()=>{try{const v=localStorage.getItem('k3_weighins');return v?JSON.parse(v):[];}catch{return [];}});
   const [newWeight,setNewWeight]=useState("");
-  const [pendingImg,setPendingImg]=useState(null); // base64 for current log
+  const [pendingImg,setPendingImg]=useState(null);
   const [aiAnalysis,setAiAnalysis]=useState(null);
   const [aiLoading,setAiLoading]=useState(false);
   const [editPhase,setEditPhase]=useState(false);
@@ -3062,7 +3063,6 @@ function PhysiqueScreen(){
   const savePhase=v=>{setPhase(v);localStorage.setItem('k3_phase',JSON.stringify(v));};
   const saveWeighIns=v=>{setWeighIns(v);localStorage.setItem('k3_weighins',JSON.stringify(v));};
 
-  // Compress image to ~80KB before storing
   const compressImage=file=>new Promise(resolve=>{
     const reader=new FileReader();
     reader.onload=e=>{
@@ -3092,10 +3092,8 @@ function PhysiqueScreen(){
     :Math.min(100,Math.round((phase.startWeight-latestWeight)/(phase.startWeight-phase.target)*100));
   const progressColor=phaseProgress>=100?"#39FF14":phaseProgress>=60?"#FFD700":"#7DF9FF";
 
-  // Get context data for a given date
   const getCtx=date=>{
     const morn=morningLogs.find(l=>l.date===date);
-    // Night log from the day before
     const prev=new Date(date+'T12:00:00');prev.setDate(prev.getDate()-1);
     const prevStr=prev.toLocaleDateString('sv-SE');
     const nigh=nightLogs.find(l=>l.date===prevStr);
@@ -3121,127 +3119,153 @@ function PhysiqueScreen(){
     <div style={{padding:"24px 20px"}}>
       <PageHeader title="PHYSIQUE"/>
 
-      {/* Phase tracker */}
-      <div style={{marginBottom:24}}>
-        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
-          <div style={{...H,fontSize:10,color:T.sub,letterSpacing:"0.12em"}}>CURRENT PHASE</div>
-          <button onClick={()=>setEditPhase(!editPhase)} style={{background:"none",border:"none",color:T.sub,cursor:"pointer",...H,fontSize:10,letterSpacing:"0.06em"}}>EDIT</button>
-        </div>
-        {editPhase?(
-          <div style={{background:T.card,padding:"16px",marginBottom:12}}>
-            <div style={{display:"flex",gap:6,marginBottom:12}}>
-              {["bulk","cut","maintain"].map(p=>(
-                <button key={p} onClick={()=>savePhase({...phase,type:p})}
-                  style={{flex:1,padding:"8px 0",background:phase.type===p?T.text:"transparent",color:phase.type===p?T.bg:T.sub,border:`1px solid ${phase.type===p?T.text:"#222"}`,borderRadius:0,...H,fontSize:11,cursor:"pointer"}}>
-                  {p.toUpperCase()}
-                </button>
-              ))}
-            </div>
-            <div style={{display:"flex",gap:8,marginBottom:8}}>
-              <div style={{flex:1}}>
-                <div style={{...H,fontSize:9,color:T.sub,marginBottom:3}}>START WEIGHT kg</div>
-                <input value={startInput} onChange={e=>setStartInput(e.target.value)}
-                  onBlur={()=>{const n=parseFloat(startInput);if(!isNaN(n))savePhase({...phase,startWeight:n});else setStartInput(String(phase.startWeight));}}
-                  type="number" style={{background:T.inp,border:"none",borderBottom:"1px solid #333",borderRadius:0,padding:"8px 4px",color:T.text,...H,fontSize:13,outline:"none",width:"100%"}}/>
-              </div>
-              <div style={{flex:1}}>
-                <div style={{...H,fontSize:9,color:T.sub,marginBottom:3}}>TARGET kg</div>
-                <input value={targetInput} onChange={e=>setTargetInput(e.target.value)}
-                  onBlur={()=>{const n=parseFloat(targetInput);if(!isNaN(n))savePhase({...phase,target:n});else setTargetInput(String(phase.target));}}
-                  type="number" style={{background:T.inp,border:"none",borderBottom:"1px solid #333",borderRadius:0,padding:"8px 4px",color:T.text,...H,fontSize:13,outline:"none",width:"100%"}}/>
-              </div>
-              <div style={{flex:1}}>
-                <div style={{...H,fontSize:9,color:T.sub,marginBottom:3}}>START DATE</div>
-                <input value={phase.start} onChange={e=>savePhase({...phase,start:e.target.value})} type="date"
-                  style={{background:T.inp,border:"none",borderBottom:"1px solid #333",borderRadius:0,padding:"8px 4px",color:T.text,...H,fontSize:11,outline:"none",width:"100%"}}/>
-              </div>
-            </div>
-            <button onClick={()=>setEditPhase(false)} style={{background:"none",border:"none",color:T.sub,cursor:"pointer",...H,fontSize:10,letterSpacing:"0.06em"}}>DONE</button>
-          </div>
-        ):(
-          <>
-            <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline",marginBottom:8}}>
-              <div style={{...H,fontSize:28,color:phase.type==="bulk"?"#FFD700":phase.type==="cut"?"#FF3B5C":"#39FF14"}}>{phase.type.toUpperCase()}</div>
-              <div style={{...H,fontSize:14,color:T.sub}}>{phase.startWeight}kg → {phase.target}kg</div>
-            </div>
-            <div style={{...H,fontSize:13,marginBottom:8}}>Currently: {latestWeight}kg · {Math.abs(latestWeight-phase.target).toFixed(1)}kg {latestWeight<phase.target?"to go":"over target"}</div>
-            <div style={{height:3,background:T.div,overflow:"hidden",marginBottom:4}}>
-              <div style={{width:"100%",height:"100%",background:`linear-gradient(to right,#5C0000,#CC0000,#FFD700,#39FF14)`,transform:`translateX(${phaseProgress-100}%)`,transition:"transform 0.4s ease"}}/>
-            </div>
-            <div style={{...H,fontSize:10,color:progressColor}}>{phaseProgress}% complete</div>
-          </>
-        )}
+      {/* Tabs */}
+      <div style={{display:"flex",borderBottom:`1px solid ${T.div}`,marginBottom:20}}>
+        {[["log","LOG"],["history","HISTORY"],["analysis","ANALYSIS"]].map(([id,l])=>(
+          <button key={id} onClick={()=>setPhysTab(id)} style={{flex:1,background:"transparent",border:"none",
+            borderBottom:`2px solid ${physTab===id?T.text:"transparent"}`,color:physTab===id?T.text:T.sub,
+            padding:"10px 0",marginBottom:-1,...H,fontSize:11,cursor:"pointer",letterSpacing:"0.06em"}}>{l}</button>
+        ))}
       </div>
 
-      {/* Daily weigh-in */}
-      <div style={{marginBottom:24}}>
-        <div style={{...H,fontSize:10,color:T.sub,letterSpacing:"0.12em",marginBottom:10}}>MORNING WEIGH-IN</div>
-        <div style={{display:"flex",gap:8,marginBottom:8}}>
-          <input value={newWeight} onChange={e=>setNewWeight(e.target.value)} placeholder="kg" type="number" step="0.1"
-            style={{flex:1,background:T.inp,border:"none",borderBottom:"1px solid #333",borderRadius:0,padding:"12px 8px",color:T.text,...H,fontSize:18,outline:"none"}}/>
-          <button onClick={logWeight} style={{padding:"0 20px",background:T.text,color:T.bg,border:"none",borderRadius:0,...H,fontSize:12,cursor:"pointer"}}>LOG</button>
-        </div>
-        {/* Photo attach */}
-        <div style={{display:"flex",alignItems:"center",gap:10}}>
-          <label style={{cursor:"pointer",border:"1px solid #222",padding:"6px 12px",...H,fontSize:10,color:T.sub,letterSpacing:"0.06em"}}>
-            {pendingImg?"📷 PHOTO ATTACHED":"📷 ATTACH PHOTO"}
-            <input type="file" accept="image/*" style={{display:"none"}} onChange={async e=>{
-              if(e.target.files[0]){const b64=await compressImage(e.target.files[0]);setPendingImg(b64);}
-            }}/>
-          </label>
-          {pendingImg&&(
+      {/* ── LOG TAB ── */}
+      {physTab==="log"&&(<>
+        {/* Phase tracker */}
+        <div style={{marginBottom:24}}>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
+            <div style={{...H,fontSize:10,color:T.sub,letterSpacing:"0.12em"}}>CURRENT PHASE</div>
+            <button onClick={()=>setEditPhase(!editPhase)} style={{background:"none",border:"none",color:T.sub,cursor:"pointer",...H,fontSize:10,letterSpacing:"0.06em"}}>EDIT</button>
+          </div>
+          {editPhase?(
+            <div style={{background:T.card,padding:"16px",marginBottom:12}}>
+              <div style={{display:"flex",gap:6,marginBottom:12}}>
+                {["bulk","cut","maintain"].map(p=>(
+                  <button key={p} onClick={()=>savePhase({...phase,type:p})}
+                    style={{flex:1,padding:"8px 0",background:phase.type===p?T.text:"transparent",color:phase.type===p?T.bg:T.sub,border:`1px solid ${phase.type===p?T.text:"#222"}`,borderRadius:0,...H,fontSize:11,cursor:"pointer"}}>
+                    {p.toUpperCase()}
+                  </button>
+                ))}
+              </div>
+              <div style={{display:"flex",gap:8,marginBottom:8}}>
+                <div style={{flex:1}}>
+                  <div style={{...H,fontSize:9,color:T.sub,marginBottom:3}}>START WEIGHT kg</div>
+                  <input value={startInput} onChange={e=>setStartInput(e.target.value)}
+                    onBlur={()=>{const n=parseFloat(startInput);if(!isNaN(n))savePhase({...phase,startWeight:n});else setStartInput(String(phase.startWeight));}}
+                    type="number" style={{background:T.inp,border:"none",borderBottom:"1px solid #333",borderRadius:0,padding:"8px 4px",color:T.text,...H,fontSize:13,outline:"none",width:"100%"}}/>
+                </div>
+                <div style={{flex:1}}>
+                  <div style={{...H,fontSize:9,color:T.sub,marginBottom:3}}>TARGET kg</div>
+                  <input value={targetInput} onChange={e=>setTargetInput(e.target.value)}
+                    onBlur={()=>{const n=parseFloat(targetInput);if(!isNaN(n))savePhase({...phase,target:n});else setTargetInput(String(phase.target));}}
+                    type="number" style={{background:T.inp,border:"none",borderBottom:"1px solid #333",borderRadius:0,padding:"8px 4px",color:T.text,...H,fontSize:13,outline:"none",width:"100%"}}/>
+                </div>
+                <div style={{flex:1}}>
+                  <div style={{...H,fontSize:9,color:T.sub,marginBottom:3}}>START DATE</div>
+                  <input value={phase.start} onChange={e=>savePhase({...phase,start:e.target.value})} type="date"
+                    style={{background:T.inp,border:"none",borderBottom:"1px solid #333",borderRadius:0,padding:"8px 4px",color:T.text,...H,fontSize:11,outline:"none",width:"100%"}}/>
+                </div>
+              </div>
+              <button onClick={()=>setEditPhase(false)} style={{background:"none",border:"none",color:T.sub,cursor:"pointer",...H,fontSize:10,letterSpacing:"0.06em"}}>DONE</button>
+            </div>
+          ):(
             <>
-              <img src={pendingImg} style={{width:40,height:40,objectFit:"cover",border:"1px solid #333"}}/>
-              <button onClick={()=>setPendingImg(null)} style={{background:"none",border:"none",color:"#444",cursor:"pointer",fontSize:14}}>×</button>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline",marginBottom:8}}>
+                <div style={{...H,fontSize:28,color:phase.type==="bulk"?"#FFD700":phase.type==="cut"?"#FF3B5C":"#39FF14"}}>{phase.type.toUpperCase()}</div>
+                <div style={{...H,fontSize:14,color:T.sub}}>{phase.startWeight}kg → {phase.target}kg</div>
+              </div>
+              <div style={{...H,fontSize:13,marginBottom:8}}>Currently: {latestWeight}kg · {Math.abs(latestWeight-phase.target).toFixed(1)}kg {latestWeight<phase.target?"to go":"over target"}</div>
+              <div style={{height:3,background:T.div,overflow:"hidden",marginBottom:4}}>
+                <div style={{width:"100%",height:"100%",background:`linear-gradient(to right,#5C0000,#CC0000,#FFD700,#39FF14)`,transform:`translateX(${phaseProgress-100}%)`,transition:"transform 0.4s ease"}}/>
+              </div>
+              <div style={{...H,fontSize:10,color:progressColor}}>{phaseProgress}% complete</div>
             </>
           )}
         </div>
-      </div>
 
-      {/* Weight history */}
-      {weighIns.length>0&&(
+        {/* Daily weigh-in */}
         <div style={{marginBottom:24}}>
-          <div style={{...H,fontSize:10,color:T.sub,letterSpacing:"0.12em",marginBottom:10}}>HISTORY</div>
-          {[...weighIns].reverse().slice(0,20).map(w=>{
-            const ctx=getCtx(w.date);
-            return(
-              <div key={w.date} style={{paddingBottom:12,marginBottom:12,borderBottom:`1px solid ${T.div}`}}>
-                <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:w.img||ctx.sleep?4:0}}>
-                  <div style={{color:T.sub,fontSize:12}}>{w.date}</div>
-                  <div style={{display:"flex",gap:12,alignItems:"center"}}>
-                    <div style={{...H,fontSize:18}}>{w.weight}kg</div>
-                    <button onClick={()=>saveWeighIns(weighIns.filter(x=>x.date!==w.date))} style={{background:"none",border:"none",color:"#333",cursor:"pointer",fontSize:14}}>×</button>
-                  </div>
-                </div>
-                {/* Context data */}
-                {(ctx.sleep||ctx.energy||ctx.mood||ctx.prevMood)&&(
-                  <div style={{display:"flex",gap:10,flexWrap:"wrap",marginBottom:w.img?6:0}}>
-                    {ctx.sleep&&<span style={{color:T.sub,fontSize:10}}>😴 {ctx.sleep}h</span>}
-                    {ctx.energy&&<span style={{color:T.sub,fontSize:10}}>⚡{ctx.energy}</span>}
-                    {ctx.mood&&<span style={{color:T.sub,fontSize:10}}>🎯{ctx.mood}</span>}
-                    {ctx.prevMood&&<span style={{color:"#444",fontSize:10}}>prev night mood {ctx.prevMood}</span>}
-                    {ctx.prevEnergy&&<span style={{color:"#444",fontSize:10}}>energy {ctx.prevEnergy}</span>}
-                  </div>
-                )}
-                {/* Progress photo thumbnail */}
-                {w.img&&<img src={w.img} style={{width:"100%",maxHeight:200,objectFit:"cover",display:"block"}}/>}
-              </div>
-            );
-          })}
+          <div style={{...H,fontSize:10,color:T.sub,letterSpacing:"0.12em",marginBottom:10}}>MORNING WEIGH-IN</div>
+          <div style={{display:"flex",gap:8,marginBottom:8}}>
+            <input value={newWeight} onChange={e=>setNewWeight(e.target.value)} placeholder="kg" type="number" step="0.1"
+              style={{flex:1,background:T.inp,border:"none",borderBottom:"1px solid #333",borderRadius:0,padding:"12px 8px",color:T.text,...H,fontSize:18,outline:"none"}}/>
+            <button onClick={logWeight} style={{padding:"0 20px",background:T.text,color:T.bg,border:"none",borderRadius:0,...H,fontSize:12,cursor:"pointer"}}>LOG</button>
+          </div>
+          <div style={{display:"flex",alignItems:"center",gap:10}}>
+            <label style={{cursor:"pointer",border:"1px solid #222",padding:"6px 12px",...H,fontSize:10,color:T.sub,letterSpacing:"0.06em"}}>
+              {pendingImg?"📷 PHOTO ATTACHED":"📷 ATTACH PHOTO"}
+              <input type="file" accept="image/*" style={{display:"none"}} onChange={async e=>{
+                if(e.target.files[0]){const b64=await compressImage(e.target.files[0]);setPendingImg(b64);}
+              }}/>
+            </label>
+            {pendingImg&&(
+              <>
+                <img src={pendingImg} style={{width:40,height:40,objectFit:"cover",border:"1px solid #333"}}/>
+                <button onClick={()=>setPendingImg(null)} style={{background:"none",border:"none",color:"#444",cursor:"pointer",fontSize:14}}>×</button>
+              </>
+            )}
+          </div>
         </div>
-      )}
 
-      {/* AI analysis */}
-      <div style={{...H,fontSize:10,color:T.sub,letterSpacing:"0.12em",marginBottom:10}}>AI PHYSIQUE ANALYSIS</div>
-      <button onClick={runAnalysis} disabled={aiLoading}
-        style={{background:"transparent",border:"1px solid #333",borderRadius:0,color:aiLoading?T.sub:T.text,padding:"12px 20px",width:"100%",...H,fontSize:12,letterSpacing:"0.08em",cursor:"pointer",marginBottom:aiAnalysis?12:0}}>
-        {aiLoading?"ANALYSING…":"ANALYSE PROGRESS"}
-      </button>
-      {aiAnalysis&&(
-        <div style={{borderLeft:"2px solid #7DF9FF",paddingLeft:12,paddingTop:4,paddingBottom:4}}>
-          <div style={{fontSize:13,color:T.sub,lineHeight:1.7,whiteSpace:"pre-line"}}>{aiAnalysis}</div>
-        </div>
-      )}
+        {/* Recent entries — weight only, no photos */}
+        {weighIns.length>0&&(
+          <div>
+            <div style={{...H,fontSize:10,color:T.sub,letterSpacing:"0.12em",marginBottom:10}}>RECENT</div>
+            {[...weighIns].reverse().slice(0,5).map(w=>(
+              <div key={w.date} style={{display:"flex",justifyContent:"space-between",alignItems:"center",paddingBottom:8,marginBottom:8,borderBottom:`1px solid ${T.div}`}}>
+                <div style={{color:T.sub,fontSize:12}}>{w.date}</div>
+                <div style={{display:"flex",gap:12,alignItems:"center"}}>
+                  {w.img&&<span style={{fontSize:10}}>📷</span>}
+                  <div style={{...H,fontSize:16}}>{w.weight}kg</div>
+                  <button onClick={()=>saveWeighIns(weighIns.filter(x=>x.date!==w.date))} style={{background:"none",border:"none",color:"#333",cursor:"pointer",fontSize:14}}>×</button>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </>)}
+
+      {/* ── HISTORY TAB ── */}
+      {physTab==="history"&&(<>
+        {weighIns.filter(w=>w.img).length===0&&(
+          <div style={{color:T.sub,fontSize:12,paddingTop:20,textAlign:"center"}}>No progress photos logged yet.</div>
+        )}
+        {[...weighIns].reverse().filter(w=>w.img).map(w=>{
+          const ctx=getCtx(w.date);
+          return(
+            <div key={w.date} style={{paddingBottom:20,marginBottom:20,borderBottom:`1px solid ${T.div}`}}>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:6}}>
+                <div style={{...H,fontSize:14}}>{w.date}</div>
+                <div style={{...H,fontSize:18}}>{w.weight}kg</div>
+              </div>
+              {(ctx.sleep||ctx.energy||ctx.mood)&&(
+                <div style={{display:"flex",gap:10,marginBottom:8,flexWrap:"wrap"}}>
+                  {ctx.sleep&&<span style={{color:T.sub,fontSize:11}}>😴 {ctx.sleep}h sleep</span>}
+                  {ctx.energy&&<span style={{color:T.sub,fontSize:11}}>⚡ energy {ctx.energy}/10</span>}
+                  {ctx.mood&&<span style={{color:T.sub,fontSize:11}}>🎯 mood {ctx.mood}/10</span>}
+                  {ctx.prevMood&&<span style={{color:"#444",fontSize:11}}>prev night mood {ctx.prevMood}/10</span>}
+                  {ctx.prevEnergy&&<span style={{color:"#444",fontSize:11}}>energy {ctx.prevEnergy}/10</span>}
+                </div>
+              )}
+              <img src={w.img} style={{width:"100%",borderRadius:0,display:"block"}}/>
+            </div>
+          );
+        })}
+      </>)}
+
+      {/* ── ANALYSIS TAB ── */}
+      {physTab==="analysis"&&(<>
+        <button onClick={runAnalysis} disabled={aiLoading}
+          style={{background:"transparent",border:"1px solid #333",borderRadius:0,color:aiLoading?T.sub:T.text,padding:"12px 20px",width:"100%",...H,fontSize:12,letterSpacing:"0.08em",cursor:"pointer",marginBottom:aiAnalysis?12:0}}>
+          {aiLoading?"ANALYSING…":"ANALYSE PROGRESS"}
+        </button>
+        {aiAnalysis&&(
+          <div style={{borderLeft:"2px solid #7DF9FF",paddingLeft:12,paddingTop:4,paddingBottom:4,marginTop:12}}>
+            <div style={{fontSize:13,color:T.sub,lineHeight:1.7,whiteSpace:"pre-line"}}>{aiAnalysis}</div>
+            <button onClick={()=>setAiAnalysis(null)} style={{background:"none",border:"none",color:"#444",...H,fontSize:10,cursor:"pointer",padding:0,marginTop:8,letterSpacing:"0.08em"}}>CLEAR</button>
+          </div>
+        )}
+        {!apiKey&&<div style={{color:"#FF3B5C",fontSize:11,marginTop:8,fontFamily:"'Barlow Condensed',sans-serif"}}>Add API key in ME → Settings to use AI analysis.</div>}
+      </>)}
     </div>
   );
 }
