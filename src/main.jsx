@@ -2,7 +2,13 @@ import { StrictMode, Component } from 'react'
 import { createRoot } from 'react-dom/client'
 import KataokaApp from './App.jsx'
 
-// Shim window.storage → localStorage so the app works outside Claude artifacts
+// Unregister any old service workers immediately
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.getRegistrations().then(registrations => {
+    registrations.forEach(r => r.unregister());
+  });
+}
+
 window.storage = {
   get: async (key) => {
     try {
@@ -34,7 +40,7 @@ class ErrorBoundary extends Component {
     if (this.state.error) {
       return (
         <div style={{padding:24,fontFamily:'monospace',background:'#0a0a0a',color:'#ff3b5c',minHeight:'100vh'}}>
-          <div style={{fontSize:14,marginBottom:8,color:'#fff'}}>APP ERROR — screenshot this and send it</div>
+          <div style={{fontSize:14,marginBottom:8,color:'#fff'}}>APP ERROR — screenshot this</div>
           <div style={{fontSize:12,wordBreak:'break-all'}}>{String(this.state.error)}</div>
           <div style={{fontSize:10,marginTop:12,color:'#666',wordBreak:'break-all'}}>{this.state.error?.stack}</div>
         </div>
@@ -51,4 +57,3 @@ createRoot(document.getElementById('root')).render(
     </ErrorBoundary>
   </StrictMode>
 )
-
