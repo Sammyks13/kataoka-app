@@ -1,4 +1,4 @@
-import { StrictMode } from 'react'
+import { StrictMode, Component } from 'react'
 import { createRoot } from 'react-dom/client'
 import KataokaApp from './App.jsx'
 
@@ -27,8 +27,28 @@ window.storage = {
   }
 }
 
+class ErrorBoundary extends Component {
+  constructor(props) { super(props); this.state = { error: null }; }
+  static getDerivedStateFromError(e) { return { error: e }; }
+  render() {
+    if (this.state.error) {
+      return (
+        <div style={{padding:24,fontFamily:'monospace',background:'#0a0a0a',color:'#ff3b5c',minHeight:'100vh'}}>
+          <div style={{fontSize:14,marginBottom:8,color:'#fff'}}>APP ERROR — screenshot this and send it</div>
+          <div style={{fontSize:12,wordBreak:'break-all'}}>{String(this.state.error)}</div>
+          <div style={{fontSize:10,marginTop:12,color:'#666',wordBreak:'break-all'}}>{this.state.error?.stack}</div>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
 createRoot(document.getElementById('root')).render(
   <StrictMode>
-    <KataokaApp />
+    <ErrorBoundary>
+      <KataokaApp />
+    </ErrorBoundary>
   </StrictMode>
 )
+
