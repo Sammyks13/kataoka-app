@@ -97,21 +97,21 @@ const uvInfo = uv => uv<=2?{c:"#39FF14",l:"Low"}:uv<=5?{c:"#FFD700",l:"Moderate"
 // the heaviest estimated 1RM across every logged lift that involves it (kw match).
 const MUSCLES = [
   // FRONT
-  {key:"CHEST",    label:"Chest",      view:"front", kw:["bench","to high fly","dip"]},
-  {key:"DELTS_F",  label:"Shoulders",  view:"front", kw:["shoulder press","lat raise","bench"]},
-  {key:"BICEPS",   label:"Biceps",     view:"front", kw:["curl","pull up","row","rock climber"]},
-  {key:"FOREARMS", label:"Forearms",   view:"front", kw:["wrist","curl","pull up","row"]},
-  {key:"ABS",      label:"Abs",        view:"front", kw:["crunch","leg raise","clean","zercher"]},
-  {key:"QUADS",    label:"Quads",      view:"front", kw:["zercher","squat","clean"]},
+  {key:"CHEST",    label:"Chest",      view:"front", kw:["bench","to high fly","dip"],             cat:"hpush"},
+  {key:"DELTS_F",  label:"Shoulders",  view:"front", kw:["shoulder press","lat raise","bench"],    cat:"vpush"},
+  {key:"BICEPS",   label:"Biceps",     view:"front", kw:["curl","pull up","row","rock climber"],   cat:"curl"},
+  {key:"FOREARMS", label:"Forearms",   view:"front", kw:["wrist","curl","pull up","row"],          cat:"forearm"},
+  {key:"ABS",      label:"Abs",        view:"front", kw:["crunch","leg raise","clean","zercher"],  cat:"core"},
+  {key:"QUADS",    label:"Quads",      view:"front", kw:["zercher","squat","clean"],               cat:"squat"},
   // BACK
-  {key:"TRAPS",    label:"Traps",      view:"back",  kw:["clean","row","shrug","shoulder press"]},
-  {key:"DELTS_R",  label:"Rear Delts", view:"back",  kw:["reverse fly","row","shoulder press"]},
-  {key:"TRICEPS",  label:"Triceps",    view:"back",  kw:["dip","bench","shoulder press"]},
-  {key:"LATS",     label:"Lats",       view:"back",  kw:["pull up","row","rock climber"]},
-  {key:"LOWERBACK",label:"Lower Back", view:"back",  kw:["clean","zercher","row"]},
-  {key:"GLUTES",   label:"Glutes",     view:"back",  kw:["zercher","squat","clean"]},
-  {key:"HAMS",     label:"Hamstrings", view:"back",  kw:["clean","zercher","deadlift"]},
-  {key:"CALVES",   label:"Calves",     view:"back",  kw:["calf raise","calf"]},
+  {key:"TRAPS",    label:"Traps",      view:"back",  kw:["clean","row","shrug","shoulder press"],  cat:"hpull"},
+  {key:"DELTS_R",  label:"Rear Delts", view:"back",  kw:["reverse fly","row","shoulder press"],   cat:"rearfly"},
+  {key:"TRICEPS",  label:"Triceps",    view:"back",  kw:["dip","bench","shoulder press"],          cat:"tricep"},
+  {key:"LATS",     label:"Lats",       view:"back",  kw:["pull up","row","rock climber"],          cat:"vpull"},
+  {key:"LOWERBACK",label:"Lower Back", view:"back",  kw:["clean","zercher","row"],                 cat:"hinge"},
+  {key:"GLUTES",   label:"Glutes",     view:"back",  kw:["zercher","squat","clean"],               cat:"squat"},
+  {key:"HAMS",     label:"Hamstrings", view:"back",  kw:["clean","zercher","deadlift"],            cat:"hinge"},
+  {key:"CALVES",   label:"Calves",     view:"back",  kw:["calf raise","calf"],                    cat:"generic"},
 ];
 
 // Muscle contribution weights per exercise — what % of each muscle each exercise stimulates
@@ -179,7 +179,8 @@ const daysSince = d => d ? Math.floor((Date.now()-new Date(d))/86400000) : null;
 const recovColor = d => d===null?"#333":d===0?"#FF3B5C":d===1?"#FF6B35":d===2?"#FFD700":"#39FF14";
 const recovLabel = d => d===null?"—":d===0?"Today":d===1?"1d":d===2?"2d":`${d}d`;
 
-// Weighted muscle rank — weighted average of all exercises contributing to this muscle
+// Weighted muscle rank — weighted average of all exercises contributing to this muscle,
+// judged against that muscle's appropriate category thresholds (not generic)
 const muscleRank = (muscle, prs, bw) => {
   let totalW=0,weightedRM=0;
   for(const [k,pr] of Object.entries(prs)){
@@ -194,7 +195,11 @@ const muscleRank = (muscle, prs, bw) => {
   }
   if(totalW===0)return null;
   const avgRM=weightedRM/totalW;
-  return{...getUniversalRank(null,avgRM,bw),rm:Math.round(avgRM)};
+  const thresh=CATEGORY_THRESHOLDS[muscle.cat]||CATEGORY_THRESHOLDS.generic;
+  const r=avgRM/bw;
+  const idx=r>=thresh[4]?4:r>=thresh[3]?3:r>=thresh[2]?2:r>=thresh[1]?1:r>=thresh[0]?0:-1;
+  const tier=idx>=0?SL_TIERS[idx]:null;
+  return{n:tier?.n??"UNTRAINED",c:tier?.c??"#4B5563",pct:tier?.pct??0,rm:Math.round(avgRM)};
 };
 const muscleRecovery = (muscle, logs) => {
   for(const log of [...logs].reverse()){
@@ -709,37 +714,6 @@ function HomeScreen(){
       )}
 
 
-
-      {/* Physique compact section */}
-      {(()=>{
-        try{
-          const phase=JSON.parse(localStorage.getItem('k3_phase')||'null');
-          const weighIns=JSON.parse(localStorage.getItem('k3_weighins')||'[]');
-          if(!phase)return null;
-          const latest=weighIns.length?weighIns[weighIns.length-1].weight:phase.startWeight;
-          const pct=phase.type==='bulk'
-            ?Math.min(100,Math.round((latest-phase.startWeight)/(phase.target-phase.startWeight)*100))
-            :Math.min(100,Math.round((phase.startWeight-latest)/(phase.startWeight-phase.target)*100));
-          const phaseCol=phase.type==="bulk"?"#FFD700":phase.type==="cut"?"#FF3B5C":"#39FF14";
-          return(
-            <>
-              <Divider/>
-              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:6}}>
-                <div style={{fontFamily:"'Barlow Condensed',sans-serif",fontWeight:900,textTransform:"uppercase",fontSize:10,color:T.sub,letterSpacing:"0.12em"}}>PHYSIQUE</div>
-                <div style={{fontFamily:"'Barlow Condensed',sans-serif",fontSize:10,color:T.sub,cursor:"pointer"}} onClick={()=>tab("me")}>ME →</div>
-              </div>
-              <div style={{display:"flex",alignItems:"center",gap:12,marginBottom:5}}>
-                <div style={{fontFamily:"'Barlow Condensed',sans-serif",fontWeight:900,fontSize:14,color:phaseCol}}>{phase.type.toUpperCase()}</div>
-                <div style={{fontFamily:"'Barlow Condensed',sans-serif",fontSize:11,color:T.sub}}>{latest}kg → {phase.target}kg</div>
-                <div style={{fontFamily:"'Barlow Condensed',sans-serif",fontWeight:700,fontSize:11,color:phaseCol,marginLeft:"auto"}}>{pct}%</div>
-              </div>
-              <div style={{height:2,background:T.div,overflow:"hidden"}}>
-                <div style={{width:"100%",height:"100%",background:`linear-gradient(to right,#5C0000,#CC0000,#FFD700,#39FF14)`,transform:`translateX(${pct-100}%)`}}/>
-              </div>
-            </>
-          );
-        }catch{return null;}
-      })()}
       {goals.length>0&&(
         <>
           <Divider/>
@@ -3073,42 +3047,70 @@ function AddEvent({saveComingSoon,comingSoon}){
 
 // ─── PHYSIQUE SCREEN ──────────────────────────────────────────────────────────
 function PhysiqueScreen(){
-  const {T,morningLogs,workoutLogs,bw,saveBw,apiKey}=useContext(Ctx);
+  const {T,morningLogs,nightLogs,workoutLogs,bw,saveBw,apiKey}=useContext(Ctx);
   const [phase,setPhase]=useState(()=>{try{const v=localStorage.getItem('k3_phase');return v?JSON.parse(v):{type:'bulk',start:todayStr(),target:75,startWeight:65};}catch{return{type:'bulk',start:todayStr(),target:75,startWeight:65};}});
   const [weighIns,setWeighIns]=useState(()=>{try{const v=localStorage.getItem('k3_weighins');return v?JSON.parse(v):[];}catch{return [];}});
   const [newWeight,setNewWeight]=useState("");
+  const [pendingImg,setPendingImg]=useState(null); // base64 for current log
   const [aiAnalysis,setAiAnalysis]=useState(null);
   const [aiLoading,setAiLoading]=useState(false);
   const [editPhase,setEditPhase]=useState(false);
+  const [targetInput,setTargetInput]=useState(String(phase.target));
+  const [startInput,setStartInput]=useState(String(phase.startWeight));
   const H={fontFamily:"'Barlow Condensed',sans-serif",fontWeight:900,textTransform:"uppercase"};
 
   const savePhase=v=>{setPhase(v);localStorage.setItem('k3_phase',JSON.stringify(v));};
   const saveWeighIns=v=>{setWeighIns(v);localStorage.setItem('k3_weighins',JSON.stringify(v));};
 
-  const logWeight=()=>{
+  // Compress image to ~80KB before storing
+  const compressImage=file=>new Promise(resolve=>{
+    const reader=new FileReader();
+    reader.onload=e=>{
+      const img=new Image();
+      img.onload=()=>{
+        const MAX=800;let w=img.width,h=img.height;
+        if(w>MAX||h>MAX){if(w>h){h=Math.round(h*MAX/w);w=MAX;}else{w=Math.round(w*MAX/h);h=MAX;}}
+        const canvas=document.createElement('canvas');canvas.width=w;canvas.height=h;
+        canvas.getContext('2d').drawImage(img,0,0,w,h);
+        resolve(canvas.toDataURL('image/jpeg',0.65));
+      };
+      img.src=e.target.result;
+    };
+    reader.readAsDataURL(file);
+  });
+
+  const logWeight=async()=>{
     if(!newWeight)return;
-    const entry={date:todayStr(),weight:parseFloat(newWeight)};
+    const entry={date:todayStr(),weight:parseFloat(newWeight),img:pendingImg||null};
     const updated=[...weighIns.filter(w=>w.date!==todayStr()),entry].sort((a,b)=>a.date.localeCompare(b.date));
-    saveWeighIns(updated);setNewWeight("");
+    saveWeighIns(updated);setNewWeight("");setPendingImg(null);
   };
 
-  // Progress toward phase target
   const latestWeight=weighIns.length?weighIns[weighIns.length-1].weight:phase.startWeight;
   const phaseProgress=phase.type==='bulk'
     ?Math.min(100,Math.round((latestWeight-phase.startWeight)/(phase.target-phase.startWeight)*100))
     :Math.min(100,Math.round((phase.startWeight-latestWeight)/(phase.startWeight-phase.target)*100));
   const progressColor=phaseProgress>=100?"#39FF14":phaseProgress>=60?"#FFD700":"#7DF9FF";
 
+  // Get context data for a given date
+  const getCtx=date=>{
+    const morn=morningLogs.find(l=>l.date===date);
+    // Night log from the day before
+    const prev=new Date(date+'T12:00:00');prev.setDate(prev.getDate()-1);
+    const prevStr=prev.toLocaleDateString('sv-SE');
+    const nigh=nightLogs.find(l=>l.date===prevStr);
+    return{sleep:morn?.sleep,energy:morn?.energy,mood:morn?.mood,prevMood:nigh?.mood,prevEnergy:nigh?.energy};
+  };
+
   const runAnalysis=async()=>{
     if(!apiKey){setAiAnalysis("Add your Anthropic API key in ME → Settings to use AI analysis.");return;}
     setAiLoading(true);
     try{
-      const recentWeigh=weighIns.slice(-14).map(w=>({d:w.date,kg:w.weight}));
-      const recentSleep=morningLogs.slice(-14).map(l=>({d:l.date,sleep:l.sleep,energy:l.energy,hrv:l.hrv}));
+      const recentWeigh=weighIns.slice(-14).map(w=>({d:w.date,kg:w.weight,...getCtx(w.date)}));
       const recentWO=workoutLogs.slice(-10).map(l=>({d:l.date.slice(0,10),diff:l.difficulty}));
-      const txt=await aiPost(apiKey,{max_tokens:500,
-        system:"You are a physique and performance coach. Analyse the data and give 4-5 blunt, specific observations about: (1) weight trajectory vs the phase target, (2) whether sleep/HRV/energy quality is supporting the phase goals, (3) training load alignment with phase, (4) one concrete action to improve. No padding, specific numbers only.",
-        messages:[{role:"user",content:"Phase: "+JSON.stringify(phase)+" Current weight: "+latestWeight+"kg. Recent weigh-ins: "+JSON.stringify(recentWeigh)+" Sleep/energy: "+JSON.stringify(recentSleep)+" Workouts: "+JSON.stringify(recentWO)}]
+      const txt=await aiPost(apiKey,{max_tokens:600,
+        system:"You are a physique and performance coach. Analyse the data and give 4-5 blunt, specific observations about: (1) weight trajectory vs phase target, (2) whether sleep/HRV/energy quality is supporting phase goals — look for correlations between bad sleep and stalled weight, (3) training load alignment with phase, (4) mood patterns on heavy training days vs rest days and whether they align with the phase demands, (5) one concrete action to improve. No padding, specific numbers only.",
+        messages:[{role:"user",content:"Phase: "+JSON.stringify(phase)+" Current weight: "+latestWeight+"kg. Weigh-ins with daily context: "+JSON.stringify(recentWeigh)+" Workouts: "+JSON.stringify(recentWO)}]
       });
       setAiAnalysis(txt);
     }catch(e){setAiAnalysis("Analysis failed: "+e.message);}
@@ -3138,13 +3140,15 @@ function PhysiqueScreen(){
             <div style={{display:"flex",gap:8,marginBottom:8}}>
               <div style={{flex:1}}>
                 <div style={{...H,fontSize:9,color:T.sub,marginBottom:3}}>START WEIGHT kg</div>
-                <input value={phase.startWeight} onChange={e=>savePhase({...phase,startWeight:parseFloat(e.target.value)||phase.startWeight})} type="number"
-                  style={{background:T.inp,border:"none",borderBottom:"1px solid #333",borderRadius:0,padding:"8px 4px",color:T.text,...H,fontSize:13,outline:"none",width:"100%"}}/>
+                <input value={startInput} onChange={e=>setStartInput(e.target.value)}
+                  onBlur={()=>{const n=parseFloat(startInput);if(!isNaN(n))savePhase({...phase,startWeight:n});else setStartInput(String(phase.startWeight));}}
+                  type="number" style={{background:T.inp,border:"none",borderBottom:"1px solid #333",borderRadius:0,padding:"8px 4px",color:T.text,...H,fontSize:13,outline:"none",width:"100%"}}/>
               </div>
               <div style={{flex:1}}>
                 <div style={{...H,fontSize:9,color:T.sub,marginBottom:3}}>TARGET kg</div>
-                <input value={phase.target} onChange={e=>savePhase({...phase,target:parseFloat(e.target.value)||phase.target})} type="number"
-                  style={{background:T.inp,border:"none",borderBottom:"1px solid #333",borderRadius:0,padding:"8px 4px",color:T.text,...H,fontSize:13,outline:"none",width:"100%"}}/>
+                <input value={targetInput} onChange={e=>setTargetInput(e.target.value)}
+                  onBlur={()=>{const n=parseFloat(targetInput);if(!isNaN(n))savePhase({...phase,target:n});else setTargetInput(String(phase.target));}}
+                  type="number" style={{background:T.inp,border:"none",borderBottom:"1px solid #333",borderRadius:0,padding:"8px 4px",color:T.text,...H,fontSize:13,outline:"none",width:"100%"}}/>
               </div>
               <div style={{flex:1}}>
                 <div style={{...H,fontSize:9,color:T.sub,marginBottom:3}}>START DATE</div>
@@ -3172,10 +3176,25 @@ function PhysiqueScreen(){
       {/* Daily weigh-in */}
       <div style={{marginBottom:24}}>
         <div style={{...H,fontSize:10,color:T.sub,letterSpacing:"0.12em",marginBottom:10}}>MORNING WEIGH-IN</div>
-        <div style={{display:"flex",gap:8}}>
+        <div style={{display:"flex",gap:8,marginBottom:8}}>
           <input value={newWeight} onChange={e=>setNewWeight(e.target.value)} placeholder="kg" type="number" step="0.1"
             style={{flex:1,background:T.inp,border:"none",borderBottom:"1px solid #333",borderRadius:0,padding:"12px 8px",color:T.text,...H,fontSize:18,outline:"none"}}/>
           <button onClick={logWeight} style={{padding:"0 20px",background:T.text,color:T.bg,border:"none",borderRadius:0,...H,fontSize:12,cursor:"pointer"}}>LOG</button>
+        </div>
+        {/* Photo attach */}
+        <div style={{display:"flex",alignItems:"center",gap:10}}>
+          <label style={{cursor:"pointer",border:"1px solid #222",padding:"6px 12px",...H,fontSize:10,color:T.sub,letterSpacing:"0.06em"}}>
+            {pendingImg?"📷 PHOTO ATTACHED":"📷 ATTACH PHOTO"}
+            <input type="file" accept="image/*" style={{display:"none"}} onChange={async e=>{
+              if(e.target.files[0]){const b64=await compressImage(e.target.files[0]);setPendingImg(b64);}
+            }}/>
+          </label>
+          {pendingImg&&(
+            <>
+              <img src={pendingImg} style={{width:40,height:40,objectFit:"cover",border:"1px solid #333"}}/>
+              <button onClick={()=>setPendingImg(null)} style={{background:"none",border:"none",color:"#444",cursor:"pointer",fontSize:14}}>×</button>
+            </>
+          )}
         </div>
       </div>
 
@@ -3183,23 +3202,34 @@ function PhysiqueScreen(){
       {weighIns.length>0&&(
         <div style={{marginBottom:24}}>
           <div style={{...H,fontSize:10,color:T.sub,letterSpacing:"0.12em",marginBottom:10}}>HISTORY</div>
-          {[...weighIns].reverse().slice(0,10).map(w=>(
-            <div key={w.date} style={{display:"flex",justifyContent:"space-between",alignItems:"center",paddingBottom:8,marginBottom:8,borderBottom:`1px solid ${T.div}`}}>
-              <div style={{color:T.sub,fontSize:12}}>{w.date}</div>
-              <div style={{display:"flex",gap:12,alignItems:"center"}}>
-                <div style={{...H,fontSize:16}}>{w.weight}kg</div>
-                <button onClick={()=>saveWeighIns(weighIns.filter(x=>x.date!==w.date))} style={{background:"none",border:"none",color:"#333",cursor:"pointer",fontSize:14}}>×</button>
+          {[...weighIns].reverse().slice(0,20).map(w=>{
+            const ctx=getCtx(w.date);
+            return(
+              <div key={w.date} style={{paddingBottom:12,marginBottom:12,borderBottom:`1px solid ${T.div}`}}>
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:w.img||ctx.sleep?4:0}}>
+                  <div style={{color:T.sub,fontSize:12}}>{w.date}</div>
+                  <div style={{display:"flex",gap:12,alignItems:"center"}}>
+                    <div style={{...H,fontSize:18}}>{w.weight}kg</div>
+                    <button onClick={()=>saveWeighIns(weighIns.filter(x=>x.date!==w.date))} style={{background:"none",border:"none",color:"#333",cursor:"pointer",fontSize:14}}>×</button>
+                  </div>
+                </div>
+                {/* Context data */}
+                {(ctx.sleep||ctx.energy||ctx.mood||ctx.prevMood)&&(
+                  <div style={{display:"flex",gap:10,flexWrap:"wrap",marginBottom:w.img?6:0}}>
+                    {ctx.sleep&&<span style={{color:T.sub,fontSize:10}}>😴 {ctx.sleep}h</span>}
+                    {ctx.energy&&<span style={{color:T.sub,fontSize:10}}>⚡{ctx.energy}</span>}
+                    {ctx.mood&&<span style={{color:T.sub,fontSize:10}}>🎯{ctx.mood}</span>}
+                    {ctx.prevMood&&<span style={{color:"#444",fontSize:10}}>prev night mood {ctx.prevMood}</span>}
+                    {ctx.prevEnergy&&<span style={{color:"#444",fontSize:10}}>energy {ctx.prevEnergy}</span>}
+                  </div>
+                )}
+                {/* Progress photo thumbnail */}
+                {w.img&&<img src={w.img} style={{width:"100%",maxHeight:200,objectFit:"cover",display:"block"}}/>}
               </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
       )}
-
-      {/* Progress graphic placeholder */}
-      <div style={{marginBottom:24,border:"1px solid #222",padding:"24px",textAlign:"center",minHeight:120,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center"}}>
-        <div style={{...H,fontSize:10,color:"#333",letterSpacing:"0.12em",marginBottom:6}}>PROGRESS GRAPHIC</div>
-        <div style={{color:"#333",fontSize:11}}>Your custom physique graphic goes here</div>
-      </div>
 
       {/* AI analysis */}
       <div style={{...H,fontSize:10,color:T.sub,letterSpacing:"0.12em",marginBottom:10}}>AI PHYSIQUE ANALYSIS</div>
