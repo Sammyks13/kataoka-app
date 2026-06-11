@@ -1,4 +1,4 @@
-import { useState, useEffect, createContext, useContext } from "react";
+import { useState, useEffect, createContext, useContext, useRef } from "react";
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, BarChart, Bar } from "recharts";
 
 
@@ -208,7 +208,20 @@ const muscleRecovery = (muscle, logs) => {
   }
   return null;
 };
-const buildMuscleStatus = (prs, bw, logs) =>
+// Merge goals-based 1RMs into PRs for muscle ranking
+const mergeGoalPRs=(prs,goals)=>{
+  const merged={...prs};
+  (goals||[]).forEach(g=>{
+    if(!g.current||!g.name)return;
+    const key=g.name.toLowerCase().replace(/\s+/g,"_");
+    if(!merged[key]||merged[key].rm<g.current){
+      merged[key]={rm:g.current,weight:g.current,reps:1,fromGoal:true};
+    }
+  });
+  return merged;
+};
+const buildMuscleStatus = (prs, bw, logs, goals=[]) =>
+  MUSCLES.map(m=>({...m, rank:muscleRank(m,mergeGoalPRs(prs,goals),bw), days:muscleRecovery(m,logs)}));
   MUSCLES.map(m=>({...m, rank:muscleRank(m,prs,bw), days:muscleRecovery(m,logs)}));
 
 // ─── Storage ──────────────────────────────────────────────────────────────────
@@ -773,10 +786,11 @@ function HomeScreen(){
 
 // ─── WORKOUT HOME ─────────────────────────────────────────────────────────────
 function WorkoutHome(){
-  const {T,prs,bw,go,workoutLogs,userDOB,saveDOB,saveBw,resetPRs}=useContext(Ctx);
+  const {T,prs,bw,go,workoutLogs,userDOB,saveDOB,saveBw,resetPRs,goals}=useContext(Ctx);
+  const mergedPRs=mergeGoalPRs(prs,goals);
   const [prResetArmed,setPrResetArmed]=useState(false);
   const H={fontFamily:"'Barlow Condensed',sans-serif",fontWeight:900,textTransform:"uppercase"};
-  const muscleStatus=buildMuscleStatus(prs,bw,workoutLogs);
+  const muscleStatus=buildMuscleStatus(prs,bw,workoutLogs,goals);
 
   // Deload detector: count consecutive workout days with difficulty >= 8
   const sortedWO=[...workoutLogs].filter(l=>l.difficulty>=8).sort((a,b)=>new Date(b.date)-new Date(a.date));
@@ -839,10 +853,10 @@ function WorkoutHome(){
       <Btn label="Workout History" onClick={()=>go("workout-history")} ghost style={{marginBottom:10,padding:"18px"}}/>
       <Btn label="Progress Tracker" onClick={()=>go("workout-progress")} ghost style={{marginBottom:28,padding:"18px"}}/>
 
-      {Object.keys(prs).length>0&&(
+      {Object.keys(mergedPRs).length>0&&(
         <>
           <div style={{fontFamily:"'Barlow Condensed',sans-serif",fontWeight:700,fontSize:11,color:T.sub,letterSpacing:"0.12em",marginBottom:14}}>PERSONAL RECORDS</div>
-          {Object.entries(prs).map(([key,pr])=>{
+          {Object.entries(mergedPRs).map(([key,pr])=>{
             const exName=key.replace(/_/g," ");
             const rank=getExerciseRank(exName,pr.rm,bw,userDOB);
             const showRankBadge=rank&&rank.source==="sl";
@@ -866,7 +880,8 @@ function WorkoutHome(){
 
 // ─── RANK EXPLAINER ───────────────────────────────────────────────────────────
 function RankExplainerScreen(){
-  const {T,bw,userDOB,prs}=useContext(Ctx);
+  const {T,bw,userDOB,prs,goals}=useContext(Ctx);
+  const displayPRs=mergeGoalPRs(prs,goals);
   const H={fontFamily:"'Barlow Condensed',sans-serif",fontWeight:900,textTransform:"uppercase"};
   const age=computeAge(userDOB);
 
@@ -900,10 +915,10 @@ function RankExplainerScreen(){
 
       {/* All logged exercises with their rank */}
       <div style={{...H,fontSize:10,color:T.sub,letterSpacing:"0.12em",marginBottom:12}}>YOUR EXERCISES · AGE {age} · {bw}kg</div>
-      {Object.entries(prs).length===0&&(
-        <div style={{color:T.sub,fontSize:12}}>No exercises logged yet. Complete a workout to see your ranks.</div>
+      {Object.entries(displayPRs).length===0&&(
+        <div style={{color:T.sub,fontSize:12}}>No exercises logged yet. Complete a workout or set goals with kg targets to see your ranks.</div>
       )}
-      {Object.entries(prs).map(([key,pr])=>{
+      {Object.entries(displayPRs).map(([key,pr])=>{
         const name=key.replace(/_/g," ");
         const rank=getUniversalRank(name,pr.rm,bw,userDOB);
         return(
@@ -914,7 +929,7 @@ function RankExplainerScreen(){
             </div>
             <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
               <div style={{color:T.sub,fontSize:11}}>{rank.desc}</div>
-              <div style={{color:T.sub,fontSize:10,marginLeft:8,flexShrink:0}}>~{Math.round(pr.rm)}kg 1RM</div>
+              <div style={{color:T.sub,fontSize:10,marginLeft:8,flexShrink:0}}>~{Math.round(pr.rm)}kg 1RM{pr.fromGoal?" (goal)":""}</div>
             </div>
             {rank.next&&<div style={{color:"#444",fontSize:10,marginTop:2}}>Next tier: {rank.next}kg</div>}
           </div>
@@ -936,7 +951,7 @@ function EditTemplates(){
   const [exBuf,setExBuf]=useState({});
   const [dragIdx,setDragIdx]=useState(null);
   const [dragOverIdx,setDragOverIdx]=useState(null);
-  const dragListRef=React.useRef(null);
+  const dragListRef=useRef(null);
   const H={fontFamily:"'Barlow Condensed',sans-serif",fontWeight:900,textTransform:"uppercase"};
 
   const updateTemplate=async updated=>saveTemplates(templates.map(t=>t.id===updated.id?updated:t));
@@ -2218,6 +2233,9 @@ function DailyScreen(){
   const verse=getDailyVerse();
   const yest=(()=>{const d=new Date();d.setDate(d.getDate()-1);return d.toISOString().split("T")[0];})();
 
+  const [mBedtime,setMBedtime]=useState("22:00");
+  const [mWakeTime,setMWakeTime]=useState("06:45");
+  const calcSleepHrs=(bed,wake)=>{if(!bed||!wake)return 0;const[bh,bm]=bed.split(":").map(Number);const[wh,wm]=wake.split(":").map(Number);let mins=(wh*60+wm)-(bh*60+bm);if(mins<0)mins+=1440;return Math.round(mins/60*10)/10;};
   const [mSleep,setMSleep]=useState("");const [mEnergy,setMEnergy]=useState("");
   const [lowSleepAlert,setLowSleepAlert]=useState(false);
   const [mMood,setMMood]=useState("");const [mNotes,setMNotes]=useState("");
@@ -2230,10 +2248,11 @@ function DailyScreen(){
   const [editBuf,setEditBuf]=useState({});
 
   const saveMorning=async()=>{
-    const entry={date:logDate,sleep:parseFloat(mSleep)||0,energy:parseInt(mEnergy)||0,mood:parseInt(mMood)||0,notes:mNotes,verse:verse.ref,hrv:parseInt(mHRV)||null,restingHR:parseInt(mHR)||null};
+    const calcSleep=calcSleepHrs(mBedtime,mWakeTime);const sleepVal=calcSleep||parseFloat(mSleep)||0;
+    const entry={date:logDate,sleep:sleepVal,bedtime:mBedtime,wakeTime:mWakeTime,energy:parseInt(mEnergy)||0,mood:parseInt(mMood)||0,notes:mNotes,verse:verse.ref,hrv:parseInt(mHRV)||null,restingHR:parseInt(mHR)||null};
     await saveMorningLogs([...morningLogs.filter(l=>l.date!==logDate),entry]);
-    setMSleep("");setMEnergy("");setMMood("");setMNotes("");setMHRV("");setMHR("");
-    if((parseFloat(mSleep)||0)>0&&(parseFloat(mSleep)||0)<8)setLowSleepAlert(true);
+    setMBedtime("22:00");setMWakeTime("06:45");setMSleep("");setMEnergy("");setMMood("");setMNotes("");setMHRV("");setMHR("");
+    if(sleepVal>0&&sleepVal<8)setLowSleepAlert(true);
   };
   const saveNight=async()=>{
     const entry={date:logDate,energy:parseInt(nEnergy)||0,mood:parseInt(nMood)||0,win:nWin,fail:nFail,missed:nMissed,gratitude:nGratitude};
@@ -2562,7 +2581,26 @@ function DailyScreen(){
             <div style={{...H,fontSize:11,color:T.text,marginTop:4}}>{verse.ref}</div>
           </div>
           <div style={{display:"flex",gap:10,marginBottom:16}}>
-            {numInp(mSleep,setMSleep,"SLEEP h","#7DF9FF")}
+            {/* Sleep: bedtime + wake → auto-calculated */}
+            <div style={{background:T.inp,borderBottom:"1px solid #333",padding:"10px 8px",marginBottom:8}}>
+              <div style={{...H,fontSize:9,color:"#7DF9FF",letterSpacing:"0.1em",marginBottom:6}}>SLEEP</div>
+              <div style={{display:"flex",gap:8,alignItems:"center"}}>
+                <div style={{flex:1}}>
+                  <div style={{...H,fontSize:8,color:T.sub,marginBottom:3}}>BED</div>
+                  <input type="time" value={mBedtime} onChange={e=>setMBedtime(e.target.value)}
+                    style={{background:"transparent",border:"none",borderBottom:"1px solid #333",padding:"4px 0",color:T.text,...H,fontSize:14,outline:"none",width:"100%"}}/>
+                </div>
+                <div style={{flex:1}}>
+                  <div style={{...H,fontSize:8,color:T.sub,marginBottom:3}}>WAKE</div>
+                  <input type="time" value={mWakeTime} onChange={e=>setMWakeTime(e.target.value)}
+                    style={{background:"transparent",border:"none",borderBottom:"1px solid #333",padding:"4px 0",color:T.text,...H,fontSize:14,outline:"none",width:"100%"}}/>
+                </div>
+                <div style={{flexShrink:0,textAlign:"right",paddingTop:12}}>
+                  <div style={{...H,fontSize:22,color:"#7DF9FF",lineHeight:1}}>{calcSleepHrs(mBedtime,mWakeTime)||"—"}</div>
+                  <div style={{...H,fontSize:8,color:T.sub}}>HRS</div>
+                </div>
+              </div>
+            </div>
             {numInp(mEnergy,setMEnergy,"ENERGY /10","#39FF14")}
             {numInp(mMood,setMMood,"MOOD /10","#FF6B35")}
           </div>
@@ -3119,9 +3157,9 @@ function PhysiqueScreen(){
     <div style={{padding:"24px 20px"}}>
       <PageHeader title="PHYSIQUE"/>
 
-      {/* Tabs */}
+      {/* Tab bar */}
       <div style={{display:"flex",borderBottom:`1px solid ${T.div}`,marginBottom:20}}>
-        {[["log","LOG"],["history","HISTORY"],["analysis","ANALYSIS"]].map(([id,l])=>(
+        {[["log","LOG"],["analysis","ANALYSIS"]].map(([id,l])=>(
           <button key={id} onClick={()=>setPhysTab(id)} style={{flex:1,background:"transparent",border:"none",
             borderBottom:`2px solid ${physTab===id?T.text:"transparent"}`,color:physTab===id?T.text:T.sub,
             padding:"10px 0",marginBottom:-1,...H,fontSize:11,cursor:"pointer",letterSpacing:"0.06em"}}>{l}</button>
@@ -3224,8 +3262,13 @@ function PhysiqueScreen(){
         )}
       </>)}
 
+      {physTab==="log"&&(
+        <Btn label="Photo History" onClick={()=>setPhysTab("history")} ghost style={{marginBottom:10,padding:"18px"}}/>
+      )}
+
       {/* ── HISTORY TAB ── */}
       {physTab==="history"&&(<>
+        <button onClick={()=>setPhysTab("log")} style={{background:"none",border:"none",color:T.sub,cursor:"pointer",fontSize:22,padding:"0 0 16px 0",lineHeight:1}}>←</button>
         {weighIns.filter(w=>w.img).length===0&&(
           <div style={{color:T.sub,fontSize:12,paddingTop:20,textAlign:"center"}}>No progress photos logged yet.</div>
         )}
