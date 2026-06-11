@@ -208,20 +208,8 @@ const muscleRecovery = (muscle, logs) => {
   }
   return null;
 };
-// Merge goals-based 1RMs into PRs for muscle ranking
-const mergeGoalPRs=(prs,goals)=>{
-  const merged={...prs};
-  (goals||[]).forEach(g=>{
-    if(!g.current||!g.name)return;
-    const key=g.name.toLowerCase().replace(/\s+/g,"_");
-    if(!merged[key]||merged[key].rm<g.current){
-      merged[key]={rm:g.current,weight:g.current,reps:1,fromGoal:true};
-    }
-  });
-  return merged;
-};
-const buildMuscleStatus = (prs, bw, logs, goals=[]) =>
-  MUSCLES.map(m=>({...m, rank:muscleRank(m,mergeGoalPRs(prs,goals),bw), days:muscleRecovery(m,logs)}));
+const buildMuscleStatus = (prs, bw, logs) =>
+  MUSCLES.map(m=>({...m, rank:muscleRank(m,prs,bw), days:muscleRecovery(m,logs)}));
   MUSCLES.map(m=>({...m, rank:muscleRank(m,prs,bw), days:muscleRecovery(m,logs)}));
 
 // ─── Storage ──────────────────────────────────────────────────────────────────
@@ -786,11 +774,10 @@ function HomeScreen(){
 
 // ─── WORKOUT HOME ─────────────────────────────────────────────────────────────
 function WorkoutHome(){
-  const {T,prs,bw,go,workoutLogs,userDOB,saveDOB,saveBw,resetPRs,goals}=useContext(Ctx);
-  const mergedPRs=mergeGoalPRs(prs,goals);
+  const {T,prs,bw,go,workoutLogs,userDOB,saveDOB,saveBw,resetPRs}=useContext(Ctx);
   const [prResetArmed,setPrResetArmed]=useState(false);
   const H={fontFamily:"'Barlow Condensed',sans-serif",fontWeight:900,textTransform:"uppercase"};
-  const muscleStatus=buildMuscleStatus(prs,bw,workoutLogs,goals);
+  const muscleStatus=buildMuscleStatus(prs,bw,workoutLogs);
 
   // Deload detector: count consecutive workout days with difficulty >= 8
   const sortedWO=[...workoutLogs].filter(l=>l.difficulty>=8).sort((a,b)=>new Date(b.date)-new Date(a.date));
@@ -853,10 +840,10 @@ function WorkoutHome(){
       <Btn label="Workout History" onClick={()=>go("workout-history")} ghost style={{marginBottom:10,padding:"18px"}}/>
       <Btn label="Progress Tracker" onClick={()=>go("workout-progress")} ghost style={{marginBottom:28,padding:"18px"}}/>
 
-      {Object.keys(mergedPRs).length>0&&(
+      {Object.keys(prs).length>0&&(
         <>
           <div style={{fontFamily:"'Barlow Condensed',sans-serif",fontWeight:700,fontSize:11,color:T.sub,letterSpacing:"0.12em",marginBottom:14}}>PERSONAL RECORDS</div>
-          {Object.entries(mergedPRs).map(([key,pr])=>{
+          {Object.entries(prs).map(([key,pr])=>{
             const exName=key.replace(/_/g," ");
             const rank=getExerciseRank(exName,pr.rm,bw,userDOB);
             const showRankBadge=rank&&rank.source==="sl";
@@ -880,8 +867,7 @@ function WorkoutHome(){
 
 // ─── RANK EXPLAINER ───────────────────────────────────────────────────────────
 function RankExplainerScreen(){
-  const {T,bw,userDOB,prs,goals}=useContext(Ctx);
-  const displayPRs=mergeGoalPRs(prs,goals);
+  const {T,bw,userDOB,prs}=useContext(Ctx);
   const H={fontFamily:"'Barlow Condensed',sans-serif",fontWeight:900,textTransform:"uppercase"};
   const age=computeAge(userDOB);
 
@@ -915,10 +901,10 @@ function RankExplainerScreen(){
 
       {/* All logged exercises with their rank */}
       <div style={{...H,fontSize:10,color:T.sub,letterSpacing:"0.12em",marginBottom:12}}>YOUR EXERCISES · AGE {age} · {bw}kg</div>
-      {Object.entries(displayPRs).length===0&&(
+      {Object.entries(prs).length===0&&(
         <div style={{color:T.sub,fontSize:12}}>No exercises logged yet. Complete a workout or set goals with kg targets to see your ranks.</div>
       )}
-      {Object.entries(displayPRs).map(([key,pr])=>{
+      {Object.entries(prs).map(([key,pr])=>{
         const name=key.replace(/_/g," ");
         const rank=getUniversalRank(name,pr.rm,bw,userDOB);
         return(
@@ -929,7 +915,7 @@ function RankExplainerScreen(){
             </div>
             <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
               <div style={{color:T.sub,fontSize:11}}>{rank.desc}</div>
-              <div style={{color:T.sub,fontSize:10,marginLeft:8,flexShrink:0}}>~{Math.round(pr.rm)}kg 1RM{pr.fromGoal?" (goal)":""}</div>
+              <div style={{color:T.sub,fontSize:10,marginLeft:8,flexShrink:0}}>~{Math.round(pr.rm)}kg 1RM</div>
             </div>
             {rank.next&&<div style={{color:"#444",fontSize:10,marginTop:2}}>Next tier: {rank.next}kg</div>}
           </div>
@@ -4064,7 +4050,7 @@ export default function KataokaApp(){
   const resetPRs=async()=>{setPrs({});await S.set("prs",{});};
 
   const ctx={T,dark,setDark,screen,screenData,go,back,tab,activeTab,
-    templates,saveTemplates,workoutLogs,saveLogs,prs,checkPR,commitWorkout,bw,resetAllData,resetPRs,
+    templates,saveTemplates,workoutLogs,saveLogs,prs,checkPR,commitWorkout,resetAllData,resetPRs,
     barberWeeks,saveBarberWeeks,barberIncome,saveBarberIncome,barberDays,saveBarberDays,
     morningLogs,saveMorningLogs,nightLogs,saveNightLogs,goals,saveGoals,comingSoon,saveComingSoon,userDOB,saveDOB,bw,saveBw,userName,saveUserName,quotes,saveQuotes,weeklyReviews,saveWeeklyReviews,soMeVideos,saveSoMeVideos,soMeFollowers,saveSoMeFollowers,habits,saveHabits,hrvLogs,saveHrvLogs,financeMonths,saveFinanceMonths,appNotes,saveAppNotes,apiKey,saveApiKey};
 
