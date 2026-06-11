@@ -199,7 +199,7 @@ const muscleRank = (muscle, prs, bw) => {
   const r=avgRM/bw;
   const idx=r>=thresh[4]?4:r>=thresh[3]?3:r>=thresh[2]?2:r>=thresh[1]?1:r>=thresh[0]?0:-1;
   const tier=idx>=0?SL_TIERS[idx]:null;
-  return{n:tier?.n??"UNTRAINED",c:tier?.c??"#4B5563",pct:tier?.pct??0,rm:Math.round(avgRM)};
+  return{n:tier?tier.n:"UNTRAINED",c:tier?tier.c:"#4B5563",pct:tier?tier.pct:0,rm:Math.round(avgRM)};
 };
 const muscleRecovery = (muscle, logs) => {
   for(const log of [...logs].reverse()){
@@ -270,7 +270,7 @@ const getUniversalRank=(name,rm1,bw,dob=null)=>{
     const[b,n,i,a,e]=slThresholds(table,bw).map(v=>Math.round(v*af));
     const idx=rm1>=e?4:rm1>=a?3:rm1>=i?2:rm1>=n?1:rm1>=b?0:-1;
     const tier=idx>=0?SL_TIERS[idx]:null;
-    return{n:tier?.n??"UNTRAINED",c:tier?.c??"#4B5563",pct:tier?.pct??0,desc:tier?.desc??"below beginner standards",ratio:tier?.ratio??"",rm:Math.round(rm1),source:"sl",next:[b,n,i,a,e][idx+1]||null};
+    return{n:tier?tier.n:"UNTRAINED",c:tier?tier.c:"#4B5563",pct:tier?tier.pct:0,desc:tier?tier.desc:"below beginner standards",ratio:tier?tier.ratio:"",rm:Math.round(rm1),source:"sl",next:[b,n,i,a,e][idx+1]||null};
   }
   // Try category pattern
   if(name){
@@ -282,7 +282,7 @@ const getUniversalRank=(name,rm1,bw,dob=null)=>{
         const thresh=CATEGORY_THRESHOLDS[cat];
         const idx=r>=thresh[4]?4:r>=thresh[3]?3:r>=thresh[2]?2:r>=thresh[1]?1:r>=thresh[0]?0:-1;
         const tier=idx>=0?SL_TIERS[idx]:null;
-        return{n:tier?.n??"UNTRAINED",c:tier?.c??"#4B5563",pct:tier?.pct??0,desc:tier?.desc??"below beginner standards",ratio:tier?.ratio??"",rm:Math.round(rm1),source:"cat",cat,next:[b,nv,i,a,e][idx+1]||null};
+        return{n:tier?tier.n:"UNTRAINED",c:tier?tier.c:"#4B5563",pct:tier?tier.pct:0,desc:tier?tier.desc:"below beginner standards",ratio:tier?tier.ratio:"",rm:Math.round(rm1),source:"cat",cat,next:[b,nv,i,a,e][idx+1]||null};
       }
     }
   }
@@ -291,7 +291,7 @@ const getUniversalRank=(name,rm1,bw,dob=null)=>{
   const fallbackTiers=CATEGORY_THRESHOLDS.generic;
   const idx=r>=fallbackTiers[4]?4:r>=fallbackTiers[3]?3:r>=fallbackTiers[2]?2:r>=fallbackTiers[1]?1:r>=fallbackTiers[0]?0:-1;
   const tier=idx>=0?SL_TIERS[idx]:null;
-  return{n:tier?.n??"UNTRAINED",c:tier?.c??"#4B5563",pct:tier?.pct??0,desc:tier?.desc??"below beginner standards",ratio:tier?.ratio??"",rm:Math.round(rm1),source:"ratio"};
+  return{n:tier?tier.n:"UNTRAINED",c:tier?tier.c:"#4B5563",pct:tier?tier.pct:0,desc:tier?tier.desc:"below beginner standards",ratio:tier?tier.ratio:"",rm:Math.round(rm1),source:"ratio"};
 };
 const getExerciseRank=getUniversalRank;
 const getRank = r => RANKS.find(x=>r>=x.min)||RANKS[RANKS.length-1];
