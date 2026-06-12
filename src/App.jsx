@@ -208,8 +208,18 @@ const muscleRecovery = (muscle, logs) => {
   }
   return null;
 };
+const mergeGoalPRs=(prs,goals)=>{
+  const merged={...prs};
+  (goals||[]).forEach(g=>{
+    if(!g||!g.current||!g.name)return;
+    const key=String(g.name).toLowerCase().replace(/\s+/g,"_");
+    if(!merged[key]||merged[key].rm<g.current){
+      merged[key]={rm:g.current,weight:g.current,reps:1,fromGoal:true};
+    }
+  });
+  return merged;
+};
 const buildMuscleStatus = (prs, bw, logs) =>
-  MUSCLES.map(m=>({...m, rank:muscleRank(m,prs,bw), days:muscleRecovery(m,logs)}));
   MUSCLES.map(m=>({...m, rank:muscleRank(m,prs,bw), days:muscleRecovery(m,logs)}));
 
 // ─── Storage ──────────────────────────────────────────────────────────────────
@@ -774,10 +784,11 @@ function HomeScreen(){
 
 // ─── WORKOUT HOME ─────────────────────────────────────────────────────────────
 function WorkoutHome(){
-  const {T,prs,bw,go,workoutLogs,userDOB,saveDOB,saveBw,resetPRs}=useContext(Ctx);
+  const {T,prs,bw,go,workoutLogs,userDOB,saveDOB,saveBw,resetPRs,goals}=useContext(Ctx);
   const [prResetArmed,setPrResetArmed]=useState(false);
   const H={fontFamily:"'Barlow Condensed',sans-serif",fontWeight:900,textTransform:"uppercase"};
-  const muscleStatus=buildMuscleStatus(prs,bw,workoutLogs);
+  const mergedPRs=mergeGoalPRs(prs,goals);
+  const muscleStatus=buildMuscleStatus(mergedPRs,bw,workoutLogs);
 
   // Deload detector: count consecutive workout days with difficulty >= 8
   const sortedWO=[...workoutLogs].filter(l=>l.difficulty>=8).sort((a,b)=>new Date(b.date)-new Date(a.date));
@@ -840,10 +851,10 @@ function WorkoutHome(){
       <Btn label="Workout History" onClick={()=>go("workout-history")} ghost style={{marginBottom:10,padding:"18px"}}/>
       <Btn label="Progress Tracker" onClick={()=>go("workout-progress")} ghost style={{marginBottom:28,padding:"18px"}}/>
 
-      {Object.keys(prs).length>0&&(
+      {Object.keys(mergedPRs).length>0&&(
         <>
           <div style={{fontFamily:"'Barlow Condensed',sans-serif",fontWeight:700,fontSize:11,color:T.sub,letterSpacing:"0.12em",marginBottom:14}}>PERSONAL RECORDS</div>
-          {Object.entries(prs).map(([key,pr])=>{
+          {Object.entries(mergedPRs).map(([key,pr])=>{
             const exName=key.replace(/_/g," ");
             const rank=getExerciseRank(exName,pr.rm,bw,userDOB);
             const showRankBadge=rank&&rank.source==="sl";
@@ -867,7 +878,8 @@ function WorkoutHome(){
 
 // ─── RANK EXPLAINER ───────────────────────────────────────────────────────────
 function RankExplainerScreen(){
-  const {T,bw,userDOB,prs}=useContext(Ctx);
+  const {T,bw,userDOB,prs,goals}=useContext(Ctx);
+  const displayPRs=mergeGoalPRs(prs,goals);
   const H={fontFamily:"'Barlow Condensed',sans-serif",fontWeight:900,textTransform:"uppercase"};
   const age=computeAge(userDOB);
 
@@ -901,10 +913,10 @@ function RankExplainerScreen(){
 
       {/* All logged exercises with their rank */}
       <div style={{...H,fontSize:10,color:T.sub,letterSpacing:"0.12em",marginBottom:12}}>YOUR EXERCISES · AGE {age} · {bw}kg</div>
-      {Object.entries(prs).length===0&&(
+      {Object.entries(displayPRs).length===0&&(
         <div style={{color:T.sub,fontSize:12}}>No exercises logged yet. Complete a workout or set goals with kg targets to see your ranks.</div>
       )}
-      {Object.entries(prs).map(([key,pr])=>{
+      {Object.entries(displayPRs).map(([key,pr])=>{
         const name=key.replace(/_/g," ");
         const rank=getUniversalRank(name,pr.rm,bw,userDOB);
         return(
