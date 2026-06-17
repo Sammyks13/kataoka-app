@@ -211,13 +211,29 @@ const muscleRecovery = (muscle, logs) => {
 const mergeGoalPRs=(prs,goals)=>{
   const merged={...prs};
   (goals||[]).forEach(g=>{
-    if(!g||!g.current||!g.name)return;
+    if(!g||!g.current||!g.name||g.unit!=="kg")return;
     const key=String(g.name).toLowerCase().replace(/\s+/g,"_");
     if(!merged[key]||merged[key].rm<g.current){
       merged[key]={rm:g.current,weight:g.current,reps:1,fromGoal:true};
     }
   });
   return merged;
+};
+const getGoalProgress=(goal)=>{
+  if(!goal||!goal.name)return null;
+  const relevant=workoutLogs.flatMap(log=>{
+    const exIds=Object.keys(log.exerciseNames||{}).filter(eid=>{
+      const name=(log.exerciseNames[eid]||'').toLowerCase();
+      return name.includes(goal.name.toLowerCase());
+    });
+    return exIds.flatMap(eid=>(log.sets[eid]||[]).filter(s=>s.weight&&s.reps));
+  });
+  if(!relevant.length)return null;
+  const best=relevant.reduce((acc,s)=>{
+    const rm=epley(s.weight,s.reps);
+    return !acc||rm>acc.rm?{rm,weight:s.weight,reps:s.reps}:acc;
+  },null);
+  return best?{fromLog:true,actual:best.rm,progress:((best.rm/goal.target)*100).toFixed(0)}:null;
 };
 const buildMuscleStatus = (prs, bw, logs) =>
   MUSCLES.map(m=>({...m, rank:muscleRank(m,prs,bw), days:muscleRecovery(m,logs)}));
@@ -544,7 +560,7 @@ function BodyMap({status}){
 // ─── TODAY CHECKLIST (live Google Calendar) ───────────────────────────────────
 const GCAL_COLORS={"1":"#7986CB","2":"#33B679","3":"#8E24AA","4":"#E67C73","5":"#F6BF26","6":"#F4511E","7":"#039BE5","8":"#616161","9":"#3F51B5","10":"#0B8043","11":"#D50000"};
 function TodayChecklist(){
-  const {T}=useContext(Ctx);
+  const {T,apiKey}=useContext(Ctx);
   const [evts,setEvts]=useState(null);
   const [ticked,setTicked]=useState({});
   const [loading,setLoading]=useState(false);
@@ -692,9 +708,18 @@ function HomeScreen(){
       </div>
 
       {/* Low sleep announcement bar */}
-      {(()=>{const todaySleep=morningLogs.find(l=>l.date===todayStr())?.sleep||0;return todaySleep>0&&todaySleep<8;})()?(<div style={{background:"#FF3B5C",padding:"4px 12px",marginBottom:8}}>
-        <div style={{fontFamily:"'Barlow Condensed',sans-serif",fontWeight:700,fontSize:9,color:"#fff",letterSpacing:"0.06em"}}>SLEEP UNDER 8HRS, ALL WORKOUTS AT 70% OF MAX WEIGHT AND ALL SETS X2 · BE CONSCIOUS OF YOUR MOOD TODAY</div>
-      </div>):null}
+      {(()=>{
+        const todaySleep=morningLogs.find(l=>l.date===todayStr())?.sleep||0;
+        if(!(todaySleep>0&&todaySleep<8))return null;
+        const severe=todaySleep<6;
+        return(
+          <div style={{background:severe?"#FFB800":"#FF3B5C",padding:"4px 12px",marginBottom:8}}>
+            <div style={{fontFamily:"'Barlow Condensed',sans-serif",fontWeight:700,fontSize:9,color:severe?"#000":"#fff",letterSpacing:"0.06em"}}>
+              {severe?"SLEEP UNDER 6HRS, NO WEIGHTS TODAY — BIKE CARDIO ONLY · BE CONSCIOUS OF YOUR MOOD TODAY":"SLEEP UNDER 8HRS, ALL WORKOUTS AT 70% OF MAX WEIGHT AND ALL SETS X2 · BE CONSCIOUS OF YOUR MOOD TODAY"}
+            </div>
+          </div>
+        );
+      })()}
 
       {/* Weather — compact single line */}
       <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:10,padding:"8px 12px",background:T.card}}>
@@ -777,14 +802,14 @@ function HomeScreen(){
       <Divider/>
       <div style={{fontFamily:"'Barlow Condensed',sans-serif",fontWeight:900,textTransform:"uppercase",fontSize:10,color:T.sub,letterSpacing:"0.12em",marginBottom:6}}>NOTES / DON'T FORGET</div>
       <textarea value={appNotes} onChange={e=>saveAppNotes(e.target.value)} placeholder="Training notes, reminders, anything..."
-        style={{background:"transparent",border:"none",borderBottom:"1px solid #222",borderRadius:0,padding:"6px 0",color:T.text,fontFamily:"'Barlow',sans-serif",fontSize:12,outline:"none",width:"100%",minHeight:44,resize:"vertical",lineHeight:1.5}}/>
+        style={{background:T.card,border:"none",borderRadius:0,padding:"12px",color:T.text,fontFamily:"'Barlow',sans-serif",fontSize:14,outline:"none",width:"100%",minHeight:220,resize:"vertical",lineHeight:1.5}}/>
     </div>
   );
 }
 
 // ─── WORKOUT HOME ─────────────────────────────────────────────────────────────
 function WorkoutHome(){
-  const {T,prs,bw,go,workoutLogs,userDOB,saveDOB,saveBw,resetPRs,goals}=useContext(Ctx);
+  const {T,prs,bw,go,workoutLogs,userDOB,saveDOB,saveBw,resetPRs,goals,morningLogs}=useContext(Ctx);
   const [prResetArmed,setPrResetArmed]=useState(false);
   const H={fontFamily:"'Barlow Condensed',sans-serif",fontWeight:900,textTransform:"uppercase"};
   const mergedPRs=mergeGoalPRs(prs,goals);
@@ -803,6 +828,9 @@ function WorkoutHome(){
     }
   }
   const showDeload=deloadStreak>=7;
+  const todayMorningWO=morningLogs.find(l=>l.date===todayStr());
+  const sleepHoursWO=todayMorningWO?.sleep||0;
+  const sleepWarningWO=todayMorningWO&&sleepHoursWO>0&&sleepHoursWO<6;
 
   return(
     <div style={{padding:"24px 20px"}}>
@@ -811,6 +839,12 @@ function WorkoutHome(){
         <div style={{borderLeft:"3px solid #FF3B5C",paddingLeft:12,marginBottom:20,paddingTop:4,paddingBottom:4}}>
           <div style={{fontFamily:"'Barlow Condensed',sans-serif",fontWeight:900,fontSize:11,color:"#FF3B5C",letterSpacing:"0.12em",marginBottom:3}}>{deloadStreak} CONSECUTIVE HARD SESSIONS</div>
           <div style={{fontFamily:"'Barlow Condensed',sans-serif",fontWeight:700,fontSize:14}}>Consider a deload week. Every session at 8+.</div>
+        </div>
+      )}
+      {sleepWarningWO&&(
+        <div style={{borderLeft:"3px solid #FFB800",paddingLeft:12,marginBottom:20,paddingTop:4,paddingBottom:4}}>
+          <div style={{fontFamily:"'Barlow Condensed',sans-serif",fontWeight:900,fontSize:11,color:"#FFB800",letterSpacing:"0.12em",marginBottom:3}}>LOW SLEEP: {sleepHoursWO}H</div>
+          <div style={{fontFamily:"'Barlow Condensed',sans-serif",fontWeight:700,fontSize:14}}>Under 6 hours. Bike cardio only today — no weights.</div>
         </div>
       )}
 
@@ -961,7 +995,7 @@ function EditTemplates(){
     if(!tmpl){setSelectedId(null);return null;}
 
     const saveExEdit=async()=>{
-      await updateTemplate({...tmpl,exercises:tmpl.exercises.map((ex,i)=>i===editExIdx?{...ex,...exBuf}:ex)});
+      await updateTemplate({...tmpl,exercises:tmpl.exercises.map((ex,i)=>i===editExIdx?{...ex,...exBuf,superset:exBuf.superset||null}:ex)});
       setEditExIdx(null);setExBuf({});
     };
     const deleteEx=async i=>updateTemplate({...tmpl,exercises:tmpl.exercises.filter((_,j)=>j!==i)});
@@ -1037,6 +1071,11 @@ function EditTemplates(){
                       onChange={e=>setExBuf(b=>({...b,targetReps:parseInt(e.target.value)||0}))} type="number"/>
                   </div>
                 </div>
+                <div style={{marginBottom:10}}>
+                  <div style={{...H,fontSize:9,color:T.sub,marginBottom:4}}>SUPERSET GROUP <span style={{color:"#444",fontWeight:400,textTransform:"none"}}>— same letter = paired</span></div>
+                  <Inp placeholder="e.g. A (leave blank for none)" value={exBuf.superset!==undefined?exBuf.superset:(ex.superset||"")}
+                    onChange={e=>setExBuf(b=>({...b,superset:e.target.value.toUpperCase().slice(0,1)}))} style={{display:"block",width:"100%"}}/>
+                </div>
                 <div style={{display:"flex",gap:8}}>
                   <Btn label="Save" onClick={saveExEdit} style={{flex:1,padding:"10px"}}/>
                   <Btn label="Cancel" onClick={()=>{setEditExIdx(null);setExBuf({});}} ghost style={{flex:0.6,padding:"10px"}}/>
@@ -1049,8 +1088,11 @@ function EditTemplates(){
                 <div onTouchStart={()=>{setDragIdx(i);setDragOverIdx(i);}}
                   style={{padding:"0 12px 0 0",color:"#444",fontSize:20,cursor:"grab",userSelect:"none",flexShrink:0,lineHeight:1,touchAction:"none"}}>≡</div>
                 <div style={{flex:1,cursor:"pointer"}}
-                  onClick={()=>{setEditExIdx(i);setExBuf({name:ex.name,sets:ex.sets,targetReps:ex.targetReps});}}>
-                  <div style={{...H,fontSize:16}}>{ex.name}</div>
+                  onClick={()=>{setEditExIdx(i);setExBuf({name:ex.name,sets:ex.sets,targetReps:ex.targetReps,superset:ex.superset||""});}}>
+                  <div style={{...H,fontSize:16,display:"flex",alignItems:"center",gap:8}}>
+                    {ex.name}
+                    {ex.superset&&<span style={{background:"#A855F7",color:"#000",fontSize:10,padding:"1px 6px",borderRadius:2,fontFamily:"'Barlow Condensed',sans-serif",fontWeight:900}}>{ex.superset}</span>}
+                  </div>
                   <div style={{color:T.sub,fontSize:11,marginTop:2}}>{ex.sets} × {ex.targetReps||"∞"}</div>
                 </div>
                 <div style={{display:"flex",gap:10,alignItems:"center"}}>
@@ -1184,6 +1226,14 @@ function ActiveWorkout(){
   const inp={background:T.inp,border:"none",borderBottom:"1px solid #333",borderRadius:0,padding:"9px 4px",color:T.text,fontFamily:"'Barlow',sans-serif",fontSize:15,outline:"none",textAlign:"center",minWidth:0};
   const totalSets=tmpl.exercises.reduce((n,ex)=>n+(sets[ex.id]||[]).filter(s=>s.weight&&s.reps).length,0);
 
+  // Group consecutive exercises sharing a superset letter into blocks
+  const exGroups=[];
+  tmpl.exercises.forEach(ex=>{
+    const last=exGroups[exGroups.length-1];
+    if(ex.superset&&last&&last.superset===ex.superset){last.items.push(ex);}
+    else exGroups.push({superset:ex.superset||null,items:[ex]});
+  });
+
   return(
     <div style={{padding:"24px 20px"}}>
       <PageHeader title={tmpl.name}/>
@@ -1193,26 +1243,36 @@ function ActiveWorkout(){
         <span style={{flex:1,fontFamily:"'Barlow Condensed',sans-serif",fontWeight:700,fontSize:10,color:T.sub,letterSpacing:"0.1em"}}>RPE</span>
         <span style={{width:28}}/>
       </div>
-      {tmpl.exercises.map(ex=>{
-        const pa=prevAvg(ex);
-        return(
-        <div key={ex.id} style={{marginBottom:20}}>
-          <div style={{fontFamily:"'Barlow Condensed',sans-serif",fontWeight:800,fontSize:16,textTransform:"uppercase",marginBottom:pa?4:10,borderLeft:`3px solid ${tmpl.color}`,paddingLeft:10}}>
-            {ex.name} <span style={{color:T.sub,fontWeight:400,fontSize:12}}>target {ex.sets}×{ex.targetReps||"∞"}</span>
-          </div>
-          {pa&&<div style={{fontFamily:"'Barlow Condensed',sans-serif",fontSize:11,color:dark?"#3A3A3A":"#BBBBBB",paddingLeft:10,marginBottom:10,letterSpacing:"0.04em"}}>prev avg {pa}kg</div>}
-          {(sets[ex.id]||[]).map((set,si)=>(
-            <div key={si} style={{display:"flex",gap:5,marginBottom:8,alignItems:"center"}}>
-              <span style={{fontFamily:"'Barlow Condensed',sans-serif",fontWeight:700,fontSize:11,color:T.sub,width:12,flexShrink:0}}>{si+1}</span>
-              <input placeholder={pa?String(pa):"–"} value={set.weight} onChange={e=>upd(ex.id,si,"weight",e.target.value)} style={{...inp,flex:1}} type="number"/>
-              <input placeholder="–" value={set.reps}  onChange={e=>upd(ex.id,si,"reps",e.target.value)}  style={{...inp,flex:1}} type="number"/>
-              <input placeholder="–" value={set.rpe}   onChange={e=>upd(ex.id,si,"rpe",e.target.value)}   style={{...inp,flex:1}} type="number"/>
-              <button onClick={()=>delSet(ex.id,si)} style={{background:"none",border:"none",color:T.sub,cursor:"pointer",fontSize:16,width:22,flexShrink:0}}>×</button>
+      {exGroups.map((group,gi)=>{
+        const isSuperset=group.items.length>1;
+        const groupContent=group.items.map(ex=>{
+          const pa=prevAvg(ex);
+          return(
+          <div key={ex.id} style={{marginBottom:isSuperset?14:20}}>
+            <div style={{fontFamily:"'Barlow Condensed',sans-serif",fontWeight:800,fontSize:16,textTransform:"uppercase",marginBottom:pa?4:10,borderLeft:isSuperset?"none":`3px solid ${tmpl.color}`,paddingLeft:isSuperset?0:10}}>
+              {ex.name} <span style={{color:T.sub,fontWeight:400,fontSize:12}}>target {ex.sets}×{ex.targetReps||"∞"}</span>
             </div>
-          ))}
-          <button onClick={()=>addSet(ex.id)} style={{background:"none",border:"none",color:T.sub,cursor:"pointer",fontFamily:"'Barlow Condensed',sans-serif",fontWeight:700,fontSize:12,letterSpacing:"0.05em",paddingLeft:22}}>+ ADD SET</button>
-        </div>
+            {pa&&<div style={{fontFamily:"'Barlow Condensed',sans-serif",fontSize:11,color:dark?"#3A3A3A":"#BBBBBB",paddingLeft:isSuperset?0:10,marginBottom:10,letterSpacing:"0.04em"}}>prev avg {pa}kg</div>}
+            {(sets[ex.id]||[]).map((set,si)=>(
+              <div key={si} style={{display:"flex",gap:5,marginBottom:8,alignItems:"center"}}>
+                <span style={{fontFamily:"'Barlow Condensed',sans-serif",fontWeight:700,fontSize:11,color:T.sub,width:12,flexShrink:0}}>{si+1}</span>
+                <input placeholder={pa?String(pa):"–"} value={set.weight} onChange={e=>upd(ex.id,si,"weight",e.target.value)} style={{...inp,flex:1}} type="number"/>
+                <input placeholder="–" value={set.reps}  onChange={e=>upd(ex.id,si,"reps",e.target.value)}  style={{...inp,flex:1}} type="number"/>
+                <input placeholder="–" value={set.rpe}   onChange={e=>upd(ex.id,si,"rpe",e.target.value)}   style={{...inp,flex:1}} type="number"/>
+                <button onClick={()=>delSet(ex.id,si)} style={{background:"none",border:"none",color:T.sub,cursor:"pointer",fontSize:16,width:22,flexShrink:0}}>×</button>
+              </div>
+            ))}
+            <button onClick={()=>addSet(ex.id)} style={{background:"none",border:"none",color:T.sub,cursor:"pointer",fontFamily:"'Barlow Condensed',sans-serif",fontWeight:700,fontSize:12,letterSpacing:"0.05em",paddingLeft:isSuperset?0:22}}>+ ADD SET</button>
+          </div>
+          );
+        });
+        if(isSuperset)return(
+          <div key={gi} style={{marginBottom:20,borderLeft:`3px solid #A855F7`,paddingLeft:10}}>
+            <div style={{fontFamily:"'Barlow Condensed',sans-serif",fontWeight:900,fontSize:11,color:"#A855F7",letterSpacing:"0.1em",marginBottom:12}}>SUPERSET {group.superset} · ALTERNATE SETS</div>
+            {groupContent}
+          </div>
         );
+        return <div key={gi}>{groupContent}</div>;
       })}
       {/* Session difficulty */}
       <div style={{marginTop:24,paddingTop:16,borderTop:`1px solid ${T.div}`}}>
@@ -1263,6 +1323,11 @@ function WorkoutHistory(){
                   {new Date(log.date).toLocaleDateString("en-GB",{weekday:"short",day:"numeric",month:"short"})}
                   {log.duration?" · "+log.duration+"min":""}
                 </div>
+                {log.notes&&(
+                  <div style={{color:T.sub,fontSize:11,marginTop:8,fontStyle:"italic",paddingTop:8,borderTop:`1px solid ${T.div}`}}>
+                    {log.notes}
+                  </div>
+                )}
               </div>
               {isConfirm?(
                 <div style={{display:"flex",gap:8,flexShrink:0}}>
@@ -1394,10 +1459,10 @@ function CreateTemplate(){
   const [sub,setSub]=useState("");
   const [color,setColor]=useState("#FF3B5C");
   const [exs,setExs]=useState([]);
-  const [exN,setExN]=useState("");const [exS,setExS]=useState("3");const [exR,setExR]=useState("");
+  const [exN,setExN]=useState("");const [exS,setExS]=useState("3");const [exR,setExR]=useState("");const [exSS,setExSS]=useState("");
   const COLS=["#FF3B5C","#3B82F6","#39FF14","#FF6B35","#7DF9FF","#FFD700","#A855F7"];
 
-  const addEx=()=>{if(!exN)return;setExs(p=>[...p,{id:String(Date.now()),name:exN,sets:parseInt(exS)||3,targetReps:parseInt(exR)||0}]);setExN("");setExR("");};
+  const addEx=()=>{if(!exN)return;setExs(p=>[...p,{id:String(Date.now()),name:exN,sets:parseInt(exS)||3,targetReps:parseInt(exR)||0,superset:exSS||null}]);setExN("");setExR("");setExSS("");};
   const build=()=>({id:String(Date.now()),name:name||"Workout",subtitle:sub,color,exercises:exs});
   // template mode
   const saveTemplate=async()=>{if(!name||!exs.length)return;await saveTemplates([...templates,build()]);back();};
@@ -1418,11 +1483,16 @@ function CreateTemplate(){
         <Inp placeholder="Exercise name" value={exN} onChange={e=>setExN(e.target.value)} style={{flex:2}}/>
         <Inp placeholder="Sets" value={exS} onChange={e=>setExS(e.target.value)} type="number" style={{flex:0.7,padding:"12px 8px"}}/>
         <Inp placeholder="Reps" value={exR} onChange={e=>setExR(e.target.value)} type="number" style={{flex:0.7,padding:"12px 8px"}}/>
+        <Inp placeholder="SS" value={exSS} onChange={e=>setExSS(e.target.value.toUpperCase().slice(0,1))} style={{flex:0.5,padding:"12px 8px",textAlign:"center"}}/>
       </div>
+      <div style={{color:T.sub,fontSize:11,marginBottom:8,lineHeight:1.4}}>SS = superset group (e.g. A). Give two exercises the same letter to pair them.</div>
       <Btn label="+ Add Exercise" onClick={addEx} ghost style={{marginBottom:14}}/>
       {exs.map((ex,i)=>(
         <div key={ex.id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",paddingBottom:10,marginBottom:10,borderBottom:`1px solid ${T.div}`}}>
-          <div style={{fontFamily:"'Barlow Condensed',sans-serif",fontWeight:700}}>{ex.name}</div>
+          <div style={{fontFamily:"'Barlow Condensed',sans-serif",fontWeight:700,display:"flex",alignItems:"center",gap:8}}>
+            {ex.name}
+            {ex.superset&&<span style={{background:"#A855F7",color:"#000",fontSize:10,padding:"1px 6px",borderRadius:2,fontFamily:"'Barlow Condensed',sans-serif",fontWeight:900}}>{ex.superset}</span>}
+          </div>
           <div style={{display:"flex",gap:12,alignItems:"center"}}>
             <span style={{color:T.sub,fontSize:12}}>{ex.sets}×{ex.targetReps||"∞"}</span>
             <button onClick={()=>setExs(p=>p.filter((_,idx)=>idx!==i))} style={{background:"none",border:"none",color:"#FF3B5C",cursor:"pointer",fontSize:18}}>×</button>
@@ -2236,9 +2306,9 @@ function DailyScreen(){
   const calcSleepHrs=(bed,wake)=>{if(!bed||!wake)return 0;const[bh,bm]=bed.split(":").map(Number);const[wh,wm]=wake.split(":").map(Number);let mins=(wh*60+wm)-(bh*60+bm);if(mins<0)mins+=1440;return Math.round(mins/60*10)/10;};
   const [mSleep,setMSleep]=useState("");const [mEnergy,setMEnergy]=useState("");
   const [lowSleepAlert,setLowSleepAlert]=useState(false);
-  const [mMood,setMMood]=useState("");const [mNotes,setMNotes]=useState("");
+  const [mMood,setMMood]=useState("");const [mMoodWord,setMMoodWord]=useState("");const [mNotes,setMNotes]=useState("");const [mStretchDone,setMStretchDone]=useState(false);
   const [mHRV,setMHRV]=useState("");const [mHR,setMHR]=useState("");
-  const [nEnergy,setNEnergy]=useState("");const [nMood,setNMood]=useState("");
+  const [nEnergy,setNEnergy]=useState("");const [nMood,setNMood]=useState("");const [nMoodWord,setNMoodWord]=useState("");const [nStretchDone,setNStretchDone]=useState(false);
   const [nWin,setNWin]=useState("");const [nFail,setNFail]=useState("");
   const [nMissed,setNMissed]=useState("");const [nGratitude,setNGratitude]=useState("");
   const [wkRating,setWkRating]=useState(null);const [wkWorked,setWkWorked]=useState("");const [wkDidnt,setWkDidnt]=useState("");const [wkNote,setWkNote]=useState("");const [wkSaved,setWkSaved]=useState(false);
@@ -2247,15 +2317,15 @@ function DailyScreen(){
 
   const saveMorning=async()=>{
     const calcSleep=calcSleepHrs(mBedtime,mWakeTime);const sleepVal=calcSleep||parseFloat(mSleep)||0;
-    const entry={date:logDate,sleep:sleepVal,bedtime:mBedtime,wakeTime:mWakeTime,energy:parseInt(mEnergy)||0,mood:parseInt(mMood)||0,notes:mNotes,verse:verse.ref,hrv:parseInt(mHRV)||null,restingHR:parseInt(mHR)||null};
+    const entry={date:logDate,sleep:sleepVal,bedtime:mBedtime,wakeTime:mWakeTime,energy:parseInt(mEnergy)||0,mood:parseInt(mMood)||0,moodWord:mMoodWord,notes:mNotes,verse:verse.ref,hrv:parseInt(mHRV)||null,restingHR:parseInt(mHR)||null,stretchDone:mStretchDone};
     await saveMorningLogs([...morningLogs.filter(l=>l.date!==logDate),entry]);
-    setMBedtime("22:00");setMWakeTime("06:45");setMSleep("");setMEnergy("");setMMood("");setMNotes("");setMHRV("");setMHR("");
+    setMBedtime("22:00");setMWakeTime("06:45");setMSleep("");setMEnergy("");setMMood("");setMMoodWord("");setMNotes("");setMHRV("");setMHR("");setMStretchDone(false);
     if(sleepVal>0&&sleepVal<8)setLowSleepAlert(true);
   };
   const saveNight=async()=>{
-    const entry={date:logDate,energy:parseInt(nEnergy)||0,mood:parseInt(nMood)||0,win:nWin,fail:nFail,missed:nMissed,gratitude:nGratitude};
+    const entry={date:logDate,energy:parseInt(nEnergy)||0,mood:parseInt(nMood)||0,moodWord:nMoodWord,win:nWin,fail:nFail,missed:nMissed,gratitude:nGratitude,stretchDone:nStretchDone};
     await saveNightLogs([...nightLogs.filter(l=>l.date!==logDate),entry]);
-    setNEnergy("");setNMood("");setNWin("");setNFail("");setNMissed("");setNGratitude("");
+    setNEnergy("");setNMood("");setNMoodWord("");setNWin("");setNFail("");setNMissed("");setNGratitude("");setNStretchDone(false);
   };
 
   const todayMorning=morningLogs.find(l=>l.date===logDate);
@@ -2275,28 +2345,6 @@ function DailyScreen(){
     <div style={{padding:"28px 20px"}}>
       <div style={{...H,fontSize:36,lineHeight:1,marginBottom:4}}>LOG</div>
       <div style={{color:T.sub,fontSize:11,marginBottom:32}}>Morning 07:00 · Night 21:00</div>
-      {/* Habit tracker */}
-      <div style={{marginBottom:24}}>
-        <div style={{fontFamily:"'Barlow Condensed',sans-serif",fontWeight:900,textTransform:"uppercase",fontSize:10,color:T.sub,letterSpacing:"0.12em",marginBottom:12}}>DAILY HABITS</div>
-        {[["morningMobility","MORNING MOBILITY","🌅"],["eveningStretches","EVENING STRETCHES","🌙"]].map(([key,label,icon])=>{
-          const done=!!todayHabits[key];const streak=habitStreak(key);
-          return(
-            <div key={key} onClick={()=>toggleHabit(key)} style={{display:"flex",justifyContent:"space-between",alignItems:"center",
-              paddingBottom:12,marginBottom:12,borderBottom:`1px solid ${T.div}`,cursor:"pointer"}}>
-              <div style={{display:"flex",alignItems:"center",gap:10}}>
-                <div style={{width:22,height:22,borderRadius:2,border:`1.5px solid ${done?"#39FF14":T.sub}`,
-                  background:done?"#39FF14":"transparent",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>
-                  {done&&<span style={{color:"#000",fontSize:12}}>✓</span>}
-                </div>
-                <div>
-                  <div style={{fontFamily:"'Barlow Condensed',sans-serif",fontWeight:700,fontSize:14,textDecoration:done?"line-through":"none",color:done?T.sub:T.text}}>{icon} {label}</div>
-                  {streak>0&&<div style={{fontFamily:"'Barlow Condensed',sans-serif",fontSize:10,color:"#FF6B35",marginTop:2}}>{streak} day streak 🔥</div>}
-                </div>
-              </div>
-            </div>
-          );
-        })}
-      </div>
 
       <Btn label="Log Today" onClick={()=>setView("log")} style={{marginBottom:10,padding:"18px"}}/>
       <Btn label="Weekly Review" onClick={()=>setView("weekly")} ghost style={{marginBottom:10,padding:"18px"}}/>
@@ -2538,15 +2586,23 @@ function DailyScreen(){
   return(
     <div style={{padding:"24px 20px"}}>
       {/* Low sleep alert — compact overlay */}
-      {lowSleepAlert&&(
-        <div onClick={()=>setLowSleepAlert(false)} style={{position:"fixed",top:0,left:0,right:0,bottom:0,background:"rgba(0,0,0,0.85)",zIndex:9999,display:"flex",alignItems:"center",justifyContent:"center",padding:"24px",cursor:"pointer"}}>
-          <div style={{background:"#111",border:"1px solid #FF3B5C",padding:"20px 24px",maxWidth:320,width:"100%"}}>
-            <div style={{fontFamily:"'Barlow Condensed',sans-serif",fontWeight:900,fontSize:10,color:"#FF3B5C",letterSpacing:"0.2em",marginBottom:10}}>⚠ SLEEP ALERT</div>
-            <div style={{fontFamily:"'Barlow Condensed',sans-serif",fontWeight:900,fontSize:17,color:"#fff",lineHeight:1.25,letterSpacing:"0.01em"}}>SLEEP UNDER 8HRS — ALL WORKOUTS AT 70% OF MAX WEIGHT AND ALL SETS X2 · BE CONSCIOUS OF YOUR MOOD TODAY</div>
-            <div style={{fontFamily:"'Barlow Condensed',sans-serif",fontSize:9,color:"#444",letterSpacing:"0.1em",marginTop:14}}>TAP TO DISMISS</div>
+      {lowSleepAlert&&(()=>{
+        const lastSleepVal=morningLogs.find(l=>l.date===logDate)?.sleep||0;
+        const severe=lastSleepVal>0&&lastSleepVal<6;
+        return(
+          <div onClick={()=>setLowSleepAlert(false)} style={{position:"fixed",top:0,left:0,right:0,bottom:0,background:"rgba(0,0,0,0.85)",zIndex:9999,display:"flex",alignItems:"center",justifyContent:"center",padding:"24px",cursor:"pointer"}}>
+            <div style={{background:"#111",border:`1px solid ${severe?"#FFB800":"#FF3B5C"}`,padding:"20px 24px",maxWidth:320,width:"100%"}}>
+              <div style={{fontFamily:"'Barlow Condensed',sans-serif",fontWeight:900,fontSize:10,color:severe?"#FFB800":"#FF3B5C",letterSpacing:"0.2em",marginBottom:10}}>⚠ SLEEP ALERT</div>
+              {severe?(
+                <div style={{fontFamily:"'Barlow Condensed',sans-serif",fontWeight:900,fontSize:17,color:"#fff",lineHeight:1.25,letterSpacing:"0.01em"}}>SLEEP UNDER 6HRS — NO WEIGHTS TODAY. BIKE CARDIO ONLY · BE CONSCIOUS OF YOUR MOOD TODAY</div>
+              ):(
+                <div style={{fontFamily:"'Barlow Condensed',sans-serif",fontWeight:900,fontSize:17,color:"#fff",lineHeight:1.25,letterSpacing:"0.01em"}}>SLEEP UNDER 8HRS — ALL WORKOUTS AT 70% OF MAX WEIGHT AND ALL SETS X2 · BE CONSCIOUS OF YOUR MOOD TODAY</div>
+              )}
+              <div style={{fontFamily:"'Barlow Condensed',sans-serif",fontSize:9,color:"#444",letterSpacing:"0.1em",marginTop:14}}>TAP TO DISMISS</div>
+            </div>
           </div>
-        </div>
-      )}
+        );
+      })()}
       <div style={{display:"flex",alignItems:"center",marginBottom:16}}>
         <InnerBack/>
         <div style={{flex:1}}>
@@ -2600,11 +2656,34 @@ function DailyScreen(){
               </div>
             </div>
             {numInp(mEnergy,setMEnergy,"ENERGY /10","#39FF14")}
-            {numInp(mMood,setMMood,"MOOD /10","#FF6B35")}
+            <div style={{display:"flex",gap:10,alignItems:"flex-end"}}>
+              {numInp(mMood,setMMood,"MOOD /10","#FF6B35")}
+              <div style={{flex:1}}>
+                <div style={{...H,fontSize:10,color:T.sub,letterSpacing:"0.1em",marginBottom:6}}>MOOD WORD</div>
+                <select value={mMoodWord} onChange={e=>setMMoodWord(e.target.value)} style={{width:"100%",padding:"8px 12px",background:"#1a1a1a",border:`1px solid ${T.div}`,color:T.text,borderRadius:"4px",fontFamily:"inherit",fontSize:13,cursor:"pointer"}}>
+                  <option value="">—</option>
+                  <option value="energized">Energized</option>
+                  <option value="peaceful">Peaceful</option>
+                  <option value="focused">Focused</option>
+                  <option value="anxious">Anxious</option>
+                  <option value="tired">Tired</option>
+                  <option value="motivated">Motivated</option>
+                  <option value="neutral">Neutral</option>
+                  <option value="overwhelmed">Overwhelmed</option>
+                  <option value="calm">Calm</option>
+                </select>
+              </div>
+            </div>
           </div>
           <div style={{marginBottom:16}}>
             <div style={{...H,fontSize:10,color:T.sub,letterSpacing:"0.1em",marginBottom:6}}>NOTES</div>
             <textarea value={mNotes} onChange={e=>setMNotes(e.target.value)} placeholder="Anything on your mind..." style={ta}/>
+          </div>
+          <div style={{marginBottom:16,paddingTop:12,borderTop:`1px solid ${T.div}`}}>
+            <label style={{display:"flex",alignItems:"center",gap:8,cursor:"pointer",fontSize:13,color:T.text}}>
+              <input type="checkbox" checked={mStretchDone} onChange={(e)=>setMStretchDone(e.target.checked)} style={{cursor:"pointer",width:16,height:16}}/>
+              <span>Stretches / Mobility done</span>
+            </label>
           </div>
           <Btn label="Save Morning Log" onClick={saveMorning}/>
         </>
@@ -2619,7 +2698,24 @@ function DailyScreen(){
           )}
           <div style={{display:"flex",gap:10,marginBottom:16}}>
             {numInp(nEnergy,setNEnergy,"ENERGY /10","#39FF14")}
-            {numInp(nMood,setNMood,"MOOD /10","#FF6B35")}
+            <div style={{flex:1,display:"flex",gap:10,alignItems:"flex-end"}}>
+              {numInp(nMood,setNMood,"MOOD /10","#FF6B35")}
+              <div style={{flex:1}}>
+                <div style={{...H,fontSize:10,color:T.sub,letterSpacing:"0.1em",marginBottom:6}}>MOOD WORD</div>
+                <select value={nMoodWord} onChange={e=>setNMoodWord(e.target.value)} style={{width:"100%",padding:"8px 12px",background:"#1a1a1a",border:`1px solid ${T.div}`,color:T.text,borderRadius:"4px",fontFamily:"inherit",fontSize:13,cursor:"pointer"}}>
+                  <option value="">—</option>
+                  <option value="energized">Energized</option>
+                  <option value="peaceful">Peaceful</option>
+                  <option value="focused">Focused</option>
+                  <option value="anxious">Anxious</option>
+                  <option value="tired">Tired</option>
+                  <option value="motivated">Motivated</option>
+                  <option value="neutral">Neutral</option>
+                  <option value="overwhelmed">Overwhelmed</option>
+                  <option value="calm">Calm</option>
+                </select>
+              </div>
+            </div>
           </div>
           {[["BIGGEST WIN",nWin,setNWin,"What went right..."],["BIGGEST FAIL",nFail,setNFail,"Honest assessment..."],["MISSED BLOCKS",nMissed,setNMissed,"What got skipped..."],["GRATEFUL FOR",nGratitude,setNGratitude,"One thing from today..."]].map(([l,v,sv,ph])=>(
             <div key={l} style={{marginBottom:12}}>
@@ -2627,6 +2723,12 @@ function DailyScreen(){
               <textarea value={v} onChange={e=>sv(e.target.value)} placeholder={ph} style={ta}/>
             </div>
           ))}
+          <div style={{marginBottom:16,paddingTop:12,borderTop:`1px solid ${T.div}`}}>
+            <label style={{display:"flex",alignItems:"center",gap:8,cursor:"pointer",fontSize:13,color:T.text}}>
+              <input type="checkbox" checked={nStretchDone} onChange={(e)=>setNStretchDone(e.target.checked)} style={{cursor:"pointer",width:16,height:16}}/>
+              <span>Stretches / Mobility done</span>
+            </label>
+          </div>
           <Btn label="Save Night Log" onClick={saveNight}/>
         </>
       )}
