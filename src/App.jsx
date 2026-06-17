@@ -2663,14 +2663,23 @@ function DailyScreen(){
                 <select value={mMoodWord} onChange={e=>setMMoodWord(e.target.value)} style={{width:"100%",padding:"8px 12px",background:"#1a1a1a",border:`1px solid ${T.div}`,color:T.text,borderRadius:"4px",fontFamily:"inherit",fontSize:13,cursor:"pointer"}}>
                   <option value="">—</option>
                   <option value="energized">Energized</option>
-                  <option value="peaceful">Peaceful</option>
-                  <option value="focused">Focused</option>
-                  <option value="anxious">Anxious</option>
-                  <option value="tired">Tired</option>
+                  <option value="happy">Happy</option>
+                  <option value="excited">Excited</option>
                   <option value="motivated">Motivated</option>
-                  <option value="neutral">Neutral</option>
-                  <option value="overwhelmed">Overwhelmed</option>
+                  <option value="content">Content</option>
                   <option value="calm">Calm</option>
+                  <option value="focused">Focused</option>
+                  <option value="neutral">Neutral</option>
+                  <option value="bored">Bored</option>
+                  <option value="tired">Tired</option>
+                  <option value="stressed">Stressed</option>
+                  <option value="anxious">Anxious</option>
+                  <option value="overwhelmed">Overwhelmed</option>
+                  <option value="frustrated">Frustrated</option>
+                  <option value="irritable">Irritable</option>
+                  <option value="angry">Angry</option>
+                  <option value="sad">Sad</option>
+                  <option value="lonely">Lonely</option>
                 </select>
               </div>
             </div>
@@ -2705,14 +2714,23 @@ function DailyScreen(){
                 <select value={nMoodWord} onChange={e=>setNMoodWord(e.target.value)} style={{width:"100%",padding:"8px 12px",background:"#1a1a1a",border:`1px solid ${T.div}`,color:T.text,borderRadius:"4px",fontFamily:"inherit",fontSize:13,cursor:"pointer"}}>
                   <option value="">—</option>
                   <option value="energized">Energized</option>
-                  <option value="peaceful">Peaceful</option>
-                  <option value="focused">Focused</option>
-                  <option value="anxious">Anxious</option>
-                  <option value="tired">Tired</option>
+                  <option value="happy">Happy</option>
+                  <option value="excited">Excited</option>
                   <option value="motivated">Motivated</option>
-                  <option value="neutral">Neutral</option>
-                  <option value="overwhelmed">Overwhelmed</option>
+                  <option value="content">Content</option>
                   <option value="calm">Calm</option>
+                  <option value="focused">Focused</option>
+                  <option value="neutral">Neutral</option>
+                  <option value="bored">Bored</option>
+                  <option value="tired">Tired</option>
+                  <option value="stressed">Stressed</option>
+                  <option value="anxious">Anxious</option>
+                  <option value="overwhelmed">Overwhelmed</option>
+                  <option value="frustrated">Frustrated</option>
+                  <option value="irritable">Irritable</option>
+                  <option value="angry">Angry</option>
+                  <option value="sad">Sad</option>
+                  <option value="lonely">Lonely</option>
                 </select>
               </div>
             </div>
