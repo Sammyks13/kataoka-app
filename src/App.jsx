@@ -275,7 +275,7 @@ const S = {
 };
 
 // ─── Google Health OAuth2 (PKCE) ───────────────────────────────────────────────
-const GHEALTH_CLIENT_ID="1096396435654-bvrnhrgsdtc1u6o3htk5a16tucr67dop.apps.googleusercontent.com";
+const GHEALTH_CLIENT_ID="1096396435654-e21c0p9eqor0nmb62qn6r3g6j7pd4lgu.apps.googleusercontent.com";
 const GHEALTH_REDIRECT_URI=typeof window!=="undefined"?window.location.origin:"https://kataoka-app.vercel.app";
 const GHEALTH_SCOPES=[
   "https://www.googleapis.com/auth/googlehealth.sleep.readonly",
@@ -319,17 +319,15 @@ const ghealthConnect=async()=>{
 const ghealthExchangeCode=async code=>{
   const verifier=sessionStorage.getItem("ghealth_verifier");
   if(!verifier)throw new Error("Missing PKCE verifier — restart connection");
-  const body=new URLSearchParams({
-    client_id:GHEALTH_CLIENT_ID,
-    code,
-    code_verifier:verifier,
-    grant_type:"authorization_code",
-    redirect_uri:GHEALTH_REDIRECT_URI,
-  });
-  const res=await fetch("https://oauth2.googleapis.com/token",{
+  const res=await fetch("/api/ghealth-token",{
     method:"POST",
-    headers:{"Content-Type":"application/x-www-form-urlencoded"},
-    body:body.toString(),
+    headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({
+      grant_type:"authorization_code",
+      code,
+      code_verifier:verifier,
+      redirect_uri:GHEALTH_REDIRECT_URI,
+    }),
   });
   if(!res.ok)throw new Error("Token exchange failed: "+(await res.text()));
   const tokens=await res.json();
@@ -347,15 +345,13 @@ const ghealthExchangeCode=async code=>{
 const ghealthRefreshToken=async()=>{
   const stored=await S.get("ghealth_tokens");
   if(!stored?.refresh_token)return null;
-  const body=new URLSearchParams({
-    client_id:GHEALTH_CLIENT_ID,
-    refresh_token:stored.refresh_token,
-    grant_type:"refresh_token",
-  });
-  const res=await fetch("https://oauth2.googleapis.com/token",{
+  const res=await fetch("/api/ghealth-token",{
     method:"POST",
-    headers:{"Content-Type":"application/x-www-form-urlencoded"},
-    body:body.toString(),
+    headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({
+      grant_type:"refresh_token",
+      refresh_token:stored.refresh_token,
+    }),
   });
   if(!res.ok)return null;
   const tokens=await res.json();
