@@ -182,24 +182,24 @@ const recovLabel = d => d===null?"—":d===0?"Today":d===1?"1d":d===2?"2d":`${d}
 // Weighted muscle rank — weighted average of all exercises contributing to this muscle,
 // judged against that muscle's appropriate category thresholds (not generic)
 const muscleRank = (muscle, prs, bw) => {
-  let totalW=0,weightedRM=0;
+  let bestRM=0;
   for(const [k,pr] of Object.entries(prs)){
     const name=k.replace(/_/g," ");
     for(const {match,w} of EXERCISE_MUSCLE_WEIGHTS){
       if(match.test(name)&&w[muscle.key]){
-        weightedRM+=pr.rm*w[muscle.key];
-        totalW+=w[muscle.key];
+        // Weight the exercise's contribution by how primary it is for this muscle
+        const contribution=pr.rm*w[muscle.key];
+        if(contribution>bestRM)bestRM=contribution;
         break;
       }
     }
   }
-  if(totalW===0)return null;
-  const avgRM=weightedRM/totalW;
+  if(bestRM===0)return null;
   const thresh=CATEGORY_THRESHOLDS[muscle.cat]||CATEGORY_THRESHOLDS.generic;
-  const r=avgRM/bw;
+  const r=bestRM/bw;
   const idx=r>=thresh[4]?4:r>=thresh[3]?3:r>=thresh[2]?2:r>=thresh[1]?1:r>=thresh[0]?0:-1;
   const tier=idx>=0?SL_TIERS[idx]:null;
-  return{n:tier?tier.n:"UNTRAINED",c:tier?tier.c:"#4B5563",pct:tier?tier.pct:0,rm:Math.round(avgRM)};
+  return{n:tier?tier.n:"UNTRAINED",c:tier?tier.c:"#4B5563",pct:tier?tier.pct:0,rm:Math.round(bestRM)};
 };
 const muscleRecovery = (muscle, logs) => {
   for(const log of [...logs].reverse()){
@@ -995,7 +995,7 @@ function EditTemplates(){
     if(!tmpl){setSelectedId(null);return null;}
 
     const saveExEdit=async()=>{
-      await updateTemplate({...tmpl,exercises:tmpl.exercises.map((ex,i)=>i===editExIdx?{...ex,...exBuf,superset:exBuf.superset||null}:ex)});
+      await updateTemplate({...tmpl,exercises:tmpl.exercises.map((ex,i)=>i===editExIdx?{...ex,...exBuf,superset:exBuf.superset||null,failType:exBuf.failType||ex.failType||null}:ex)});
       setEditExIdx(null);setExBuf({});
     };
     const deleteEx=async i=>updateTemplate({...tmpl,exercises:tmpl.exercises.filter((_,j)=>j!==i)});
@@ -1075,6 +1075,24 @@ function EditTemplates(){
                   <div style={{...H,fontSize:9,color:T.sub,marginBottom:4}}>SUPERSET GROUP <span style={{color:"#444",fontWeight:400,textTransform:"none"}}>— same letter = paired</span></div>
                   <Inp placeholder="e.g. A (leave blank for none)" value={exBuf.superset!==undefined?exBuf.superset:(ex.superset||"")}
                     onChange={e=>setExBuf(b=>({...b,superset:e.target.value.toUpperCase().slice(0,1)}))} style={{display:"block",width:"100%"}}/>
+                  <div style={{...H,fontSize:9,color:T.sub,marginBottom:6,marginTop:10}}>FAILURE TYPE</div>
+                  <div style={{display:"flex",gap:6}}>
+                    {[["mf","MECHANICAL","#FF3B5C"],["tf","TECHNICAL","#FF6B35"],["rt","REP TARGET","#3B82F6"]].map(([val,label,col])=>{
+                      const current="failType" in exBuf?exBuf.failType:(ex.failType||null);
+                      const active=current===val;
+                      return(
+                        <button key={val} onClick={()=>setExBuf(b=>{
+                          const cur="failType" in b?b.failType:(ex.failType||null);
+                          return {...b,failType:cur===val?null:val};
+                        })}
+                          style={{flex:1,padding:"8px 4px",background:active?col:"transparent",border:`1px solid ${active?col:"#333"}`,
+                            color:active?"#000":col,fontFamily:"'Barlow Condensed',sans-serif",fontWeight:900,fontSize:10,
+                            letterSpacing:"0.06em",cursor:"pointer",borderRadius:2}}>
+                          {label}
+                        </button>
+                      );
+                    })}
+                  </div>
                 </div>
                 <div style={{display:"flex",gap:8}}>
                   <Btn label="Save" onClick={saveExEdit} style={{flex:1,padding:"10px"}}/>
@@ -1088,10 +1106,11 @@ function EditTemplates(){
                 <div onTouchStart={()=>{setDragIdx(i);setDragOverIdx(i);}}
                   style={{padding:"0 12px 0 0",color:"#444",fontSize:20,cursor:"grab",userSelect:"none",flexShrink:0,lineHeight:1,touchAction:"none"}}>≡</div>
                 <div style={{flex:1,cursor:"pointer"}}
-                  onClick={()=>{setEditExIdx(i);setExBuf({name:ex.name,sets:ex.sets,targetReps:ex.targetReps,superset:ex.superset||""});}}>
+                  onClick={()=>{setEditExIdx(i);setExBuf({name:ex.name,sets:ex.sets,targetReps:ex.targetReps,superset:ex.superset||"",failType:ex.failType||null});}}>
                   <div style={{...H,fontSize:16,display:"flex",alignItems:"center",gap:8}}>
                     {ex.name}
                     {ex.superset&&<span style={{background:"#A855F7",color:"#000",fontSize:10,padding:"1px 6px",borderRadius:2,fontFamily:"'Barlow Condensed',sans-serif",fontWeight:900}}>{ex.superset}</span>}
+                    {ex.failType&&<span style={{background:{mf:"#FF3B5C",tf:"#FF6B35",rt:"#3B82F6"}[ex.failType],color:"#000",fontSize:10,padding:"1px 6px",borderRadius:2,fontFamily:"'Barlow Condensed',sans-serif",fontWeight:900}}>{{mf:"MECH",tf:"TECH",rt:"REP"}[ex.failType]}</span>}
                   </div>
                   <div style={{color:T.sub,fontSize:11,marginTop:2}}>{ex.sets} × {ex.targetReps||"∞"}</div>
                 </div>
@@ -1210,18 +1229,20 @@ function ActiveWorkout(){
     tab("workout");
   };
 
-  // For each exercise, find avg weight from the most recent previous session
-  const prevAvg=ex=>{
+  // For each exercise, find the weight done on each set position last session
+  const prevSets=ex=>{
     const prev=[...workoutLogs]
       .sort((a,b)=>new Date(b.date)-new Date(a.date))
       .find(log=>log.exerciseNames&&Object.values(log.exerciseNames).some(n=>n===ex.name)&&log.sets);
-    if(!prev)return null;
+    if(!prev)return [];
     const eid=Object.keys(prev.exerciseNames||{}).find(k=>prev.exerciseNames[k]===ex.name);
-    if(!eid)return null;
-    const filled=(prev.sets[eid]||[]).filter(s=>s.weight&&parseFloat(s.weight)>0);
-    if(!filled.length)return null;
-    return Math.round((filled.reduce((s,x)=>s+parseFloat(x.weight),0)/filled.length)*10)/10;
+    if(!eid)return [];
+    return (prev.sets[eid]||[]).map(s=>s.weight&&parseFloat(s.weight)>0?Math.round(parseFloat(s.weight)*10)/10:null);
   };
+
+  const FAIL_COLORS={mf:"#FF3B5C",tf:"#FF6B35",rt:"#3B82F6"};
+  const FAIL_LABELS={mf:"Mechanical failure",tf:"Technical failure",rt:"Rep target"};
+  const failColor=ex=>FAIL_COLORS[ex.failType]||tmpl.color;
 
   const inp={background:T.inp,border:"none",borderBottom:"1px solid #333",borderRadius:0,padding:"9px 4px",color:T.text,fontFamily:"'Barlow',sans-serif",fontSize:15,outline:"none",textAlign:"center",minWidth:0};
   const totalSets=tmpl.exercises.reduce((n,ex)=>n+(sets[ex.id]||[]).filter(s=>s.weight&&s.reps).length,0);
@@ -1234,9 +1255,22 @@ function ActiveWorkout(){
     else exGroups.push({superset:ex.superset||null,items:[ex]});
   });
 
+  // Which fail types are used in this template (for legend)
+  const usedFailTypes=[...new Set(tmpl.exercises.map(ex=>ex.failType).filter(Boolean))];
+
   return(
     <div style={{padding:"24px 20px"}}>
       <PageHeader title={tmpl.name}/>
+      {usedFailTypes.length>0&&(
+        <div style={{display:"flex",gap:12,marginBottom:14,paddingLeft:2}}>
+          {usedFailTypes.map(ft=>(
+            <div key={ft} style={{display:"flex",alignItems:"center",gap:4}}>
+              <div style={{width:3,height:14,background:FAIL_COLORS[ft],borderRadius:1,flexShrink:0}}/>
+              <span style={{fontFamily:"'Barlow Condensed',sans-serif",fontSize:10,color:T.sub,letterSpacing:"0.04em"}}>{FAIL_LABELS[ft]}</span>
+            </div>
+          ))}
+        </div>
+      )}
       <div style={{display:"flex",gap:8,padding:"0 14px 6px 28px"}}>
         <span style={{flex:1,fontFamily:"'Barlow Condensed',sans-serif",fontWeight:700,fontSize:10,color:T.sub,letterSpacing:"0.1em"}}>KG</span>
         <span style={{flex:1,fontFamily:"'Barlow Condensed',sans-serif",fontWeight:700,fontSize:10,color:T.sub,letterSpacing:"0.1em"}}>REPS</span>
@@ -1246,22 +1280,26 @@ function ActiveWorkout(){
       {exGroups.map((group,gi)=>{
         const isSuperset=group.items.length>1;
         const groupContent=group.items.map(ex=>{
-          const pa=prevAvg(ex);
+          const ps=prevSets(ex);
+          const hasPrev=ps.some(v=>v!==null&&v!==undefined);
           return(
           <div key={ex.id} style={{marginBottom:isSuperset?14:20}}>
-            <div style={{fontFamily:"'Barlow Condensed',sans-serif",fontWeight:800,fontSize:16,textTransform:"uppercase",marginBottom:pa?4:10,borderLeft:isSuperset?"none":`3px solid ${tmpl.color}`,paddingLeft:isSuperset?0:10}}>
+            <div style={{fontFamily:"'Barlow Condensed',sans-serif",fontWeight:800,fontSize:16,textTransform:"uppercase",marginBottom:hasPrev?4:10,borderLeft:isSuperset?"none":`3px solid ${failColor(ex)}`,paddingLeft:isSuperset?0:10}}>
               {ex.name} <span style={{color:T.sub,fontWeight:400,fontSize:12}}>target {ex.sets}×{ex.targetReps||"∞"}</span>
             </div>
-            {pa&&<div style={{fontFamily:"'Barlow Condensed',sans-serif",fontSize:11,color:dark?"#3A3A3A":"#BBBBBB",paddingLeft:isSuperset?0:10,marginBottom:10,letterSpacing:"0.04em"}}>prev avg {pa}kg</div>}
-            {(sets[ex.id]||[]).map((set,si)=>(
+            {hasPrev&&<div style={{fontFamily:"'Barlow Condensed',sans-serif",fontSize:11,color:dark?"#3A3A3A":"#BBBBBB",paddingLeft:isSuperset?0:10,marginBottom:10,letterSpacing:"0.04em"}}>last session, per set</div>}
+            {(sets[ex.id]||[]).map((set,si)=>{
+              const prevW=ps[si];
+              return(
               <div key={si} style={{display:"flex",gap:5,marginBottom:8,alignItems:"center"}}>
                 <span style={{fontFamily:"'Barlow Condensed',sans-serif",fontWeight:700,fontSize:11,color:T.sub,width:12,flexShrink:0}}>{si+1}</span>
-                <input placeholder={pa?String(pa):"–"} value={set.weight} onChange={e=>upd(ex.id,si,"weight",e.target.value)} style={{...inp,flex:1}} type="number"/>
+                <input placeholder={prevW?String(prevW):"–"} value={set.weight} onChange={e=>upd(ex.id,si,"weight",e.target.value)} style={{...inp,flex:1}} type="text" inputMode="decimal"/>
                 <input placeholder="–" value={set.reps}  onChange={e=>upd(ex.id,si,"reps",e.target.value)}  style={{...inp,flex:1}} type="number"/>
                 <input placeholder="–" value={set.rpe}   onChange={e=>upd(ex.id,si,"rpe",e.target.value)}   style={{...inp,flex:1}} type="number"/>
                 <button onClick={()=>delSet(ex.id,si)} style={{background:"none",border:"none",color:T.sub,cursor:"pointer",fontSize:16,width:22,flexShrink:0}}>×</button>
               </div>
-            ))}
+              );
+            })}
             <button onClick={()=>addSet(ex.id)} style={{background:"none",border:"none",color:T.sub,cursor:"pointer",fontFamily:"'Barlow Condensed',sans-serif",fontWeight:700,fontSize:12,letterSpacing:"0.05em",paddingLeft:isSuperset?0:22}}>+ ADD SET</button>
           </div>
           );
