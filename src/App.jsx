@@ -274,6 +274,154 @@ const S = {
   async set(k,v){try{await window.storage.set("k3_"+k,JSON.stringify(v));}catch{}},
 };
 
+// ─── Google Health OAuth2 (PKCE) ───────────────────────────────────────────────
+const GHEALTH_CLIENT_ID="1096396435654-e21c0p9eqor0nmb62qn6r3g6j7pd4lgu.apps.googleusercontent.com";
+const GHEALTH_REDIRECT_URI=typeof window!=="undefined"?window.location.origin:"https://kataoka-app.vercel.app";
+const GHEALTH_SCOPES=[
+  "https://www.googleapis.com/auth/googlehealth.sleep.readonly",
+  "https://www.googleapis.com/auth/googlehealth.health_metrics_and_measurements.readonly",
+].join(" ");
+
+// Generate a random PKCE code verifier
+const ghealthGenVerifier=()=>{
+  const arr=new Uint8Array(64);
+  crypto.getRandomValues(arr);
+  return btoa(String.fromCharCode(...arr)).replace(/\+/g,"-").replace(/\//g,"_").replace(/=/g,"");
+};
+// SHA-256 hash + base64url encode the verifier to get the code challenge
+const ghealthGenChallenge=async verifier=>{
+  const enc=new TextEncoder().encode(verifier);
+  const hash=await crypto.subtle.digest("SHA-256",enc);
+  const bytes=new Uint8Array(hash);
+  let str="";for(const b of bytes)str+=String.fromCharCode(b);
+  return btoa(str).replace(/\+/g,"-").replace(/\//g,"_").replace(/=/g,"");
+};
+
+// Kick off the OAuth flow — redirects the browser to Google's consent screen
+const ghealthConnect=async()=>{
+  const verifier=ghealthGenVerifier();
+  const challenge=await ghealthGenChallenge(verifier);
+  sessionStorage.setItem("ghealth_verifier",verifier);
+  const params=new URLSearchParams({
+    client_id:GHEALTH_CLIENT_ID,
+    redirect_uri:GHEALTH_REDIRECT_URI,
+    response_type:"code",
+    scope:GHEALTH_SCOPES,
+    access_type:"offline",
+    prompt:"consent",
+    code_challenge:challenge,
+    code_challenge_method:"S256",
+  });
+  window.location.href=`https://accounts.google.com/o/oauth2/v2/auth?${params.toString()}`;
+};
+
+// Exchange an auth code (from the redirect callback) for tokens
+const ghealthExchangeCode=async code=>{
+  const verifier=sessionStorage.getItem("ghealth_verifier");
+  if(!verifier)throw new Error("Missing PKCE verifier — restart connection");
+  const body=new URLSearchParams({
+    client_id:GHEALTH_CLIENT_ID,
+    code,
+    code_verifier:verifier,
+    grant_type:"authorization_code",
+    redirect_uri:GHEALTH_REDIRECT_URI,
+  });
+  const res=await fetch("https://oauth2.googleapis.com/token",{
+    method:"POST",
+    headers:{"Content-Type":"application/x-www-form-urlencoded"},
+    body:body.toString(),
+  });
+  if(!res.ok)throw new Error("Token exchange failed: "+(await res.text()));
+  const tokens=await res.json();
+  sessionStorage.removeItem("ghealth_verifier");
+  const stored={
+    access_token:tokens.access_token,
+    refresh_token:tokens.refresh_token,
+    expires_at:Date.now()+(tokens.expires_in*1000),
+  };
+  await S.set("ghealth_tokens",stored);
+  return stored;
+};
+
+// Refresh an expired access token using the stored refresh token
+const ghealthRefreshToken=async()=>{
+  const stored=await S.get("ghealth_tokens");
+  if(!stored?.refresh_token)return null;
+  const body=new URLSearchParams({
+    client_id:GHEALTH_CLIENT_ID,
+    refresh_token:stored.refresh_token,
+    grant_type:"refresh_token",
+  });
+  const res=await fetch("https://oauth2.googleapis.com/token",{
+    method:"POST",
+    headers:{"Content-Type":"application/x-www-form-urlencoded"},
+    body:body.toString(),
+  });
+  if(!res.ok)return null;
+  const tokens=await res.json();
+  const updated={
+    access_token:tokens.access_token,
+    refresh_token:stored.refresh_token, // refresh tokens aren't usually re-issued
+    expires_at:Date.now()+(tokens.expires_in*1000),
+  };
+  await S.set("ghealth_tokens",updated);
+  return updated;
+};
+
+// Get a valid access token, refreshing if needed. Returns null if not connected.
+const ghealthGetValidToken=async()=>{
+  let stored=await S.get("ghealth_tokens");
+  if(!stored)return null;
+  if(Date.now()>stored.expires_at-60000){ // refresh 1 min before expiry
+    stored=await ghealthRefreshToken();
+  }
+  return stored?.access_token||null;
+};
+
+const ghealthDisconnect=async()=>{await S.set("ghealth_tokens",null);};
+
+// Fetch sleep data for a given date (YYYY-MM-DD), returns hours slept + bed/wake times, or null
+const ghealthFetchSleep=async(dateStr)=>{
+  const token=await ghealthGetValidToken();
+  if(!token)return null;
+  const url=`https://health.googleapis.com/v4/users/me/dataTypes/sleep/dataPoints?filter=sleep.interval.civil_end_time >= "${dateStr}"&pageSize=5`;
+  const res=await fetch(url,{headers:{Authorization:`Bearer ${token}`}});
+  if(!res.ok)return null;
+  const data=await res.json();
+  const point=data?.dataPoints?.[0];
+  if(!point?.sleep)return null;
+  const start=new Date(point.sleep.interval.startTime);
+  const end=new Date(point.sleep.interval.endTime);
+  const hours=Math.round(((end-start)/3600000)*10)/10;
+  return{
+    sleep:hours,
+    bedtime:start.toTimeString().slice(0,5),
+    wakeTime:end.toTimeString().slice(0,5),
+  };
+};
+
+// Fetch resting heart rate for a given date
+const ghealthFetchRestingHR=async(dateStr)=>{
+  const token=await ghealthGetValidToken();
+  if(!token)return null;
+  const url=`https://health.googleapis.com/v4/users/me/dataTypes/dailyRestingHeartRate/dataPoints?filter=dailyRestingHeartRate.date = "${dateStr}"&pageSize=1`;
+  const res=await fetch(url,{headers:{Authorization:`Bearer ${token}`}});
+  if(!res.ok)return null;
+  const data=await res.json();
+  return data?.dataPoints?.[0]?.dailyRestingHeartRate?.value||null;
+};
+
+// Fetch HRV for a given date
+const ghealthFetchHRV=async(dateStr)=>{
+  const token=await ghealthGetValidToken();
+  if(!token)return null;
+  const url=`https://health.googleapis.com/v4/users/me/dataTypes/dailyHeartRateVariability/dataPoints?filter=dailyHeartRateVariability.date = "${dateStr}"&pageSize=1`;
+  const res=await fetch(url,{headers:{Authorization:`Bearer ${token}`}});
+  if(!res.ok)return null;
+  const data=await res.json();
+  return data?.dataPoints?.[0]?.dailyHeartRateVariability?.value||null;
+};
+
 // ─── Ranks ────────────────────────────────────────────────────────────────────
 const RANKS=[{min:2.5,n:"GRANDMASTER",c:"#FFD700"},{min:2.0,n:"MASTER",c:"#FF6B35"},{min:1.75,n:"DIAMOND",c:"#7DF9FF"},{min:1.5,n:"PLATINUM",c:"#D0D0D0"},{min:1.25,n:"GOLD",c:"#FFD700"},{min:1.0,n:"SILVER",c:"#C0C0C0"},{min:0.75,n:"BRONZE",c:"#CD7F32"},{min:0.5,n:"IRON",c:"#888"},{min:0,n:"ROOKIE",c:"#555"}];
 
@@ -2840,7 +2988,7 @@ function DailyScreen(){
 
 // ─── HEALTH HEALTH ───────────────────────────────────────────────────────────────────
 function HealthScreen(){
-  const {T,morningLogs,nightLogs,workoutLogs,goals,apiKey}=useContext(Ctx);
+  const {T,morningLogs,nightLogs,workoutLogs,goals,apiKey,ghealthConnected,ghealthSyncing,ghealthError,ghealthSyncToday,ghealthDoConnect,ghealthDoDisconnect}=useContext(Ctx);
   const [period,setPeriod]=useState(30);
   const [insights,setInsights]=useState(null);
   const [aiLoading,setAiLoading]=useState(false);
@@ -3132,6 +3280,27 @@ function HealthScreen(){
   return(
     <div style={{padding:"24px 20px"}}>
       <PageHeader title="HEALTH"/>
+
+      {/* Google Health connect card */}
+      <div style={{background:T.card,padding:"14px 16px",marginBottom:16}}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:ghealthConnected?10:0}}>
+          <div>
+            <div style={{...H,fontSize:13}}>GOOGLE HEALTH</div>
+            <div style={{color:T.sub,fontSize:11,marginTop:2}}>{ghealthConnected?"Connected · Fitbit Charge 6":"Sync sleep, HRV, resting HR automatically"}</div>
+          </div>
+          {ghealthConnected?(
+            <button onClick={ghealthDoDisconnect} style={{background:"transparent",border:`1px solid ${T.div}`,color:T.sub,padding:"7px 12px",borderRadius:2,fontFamily:"'Barlow Condensed',sans-serif",fontWeight:700,fontSize:11,cursor:"pointer"}}>DISCONNECT</button>
+          ):(
+            <button onClick={ghealthDoConnect} style={{background:"#3B82F6",border:"none",color:"#000",padding:"7px 14px",borderRadius:2,fontFamily:"'Barlow Condensed',sans-serif",fontWeight:900,fontSize:11,cursor:"pointer"}}>CONNECT</button>
+          )}
+        </div>
+        {ghealthConnected&&(
+          <button onClick={ghealthSyncToday} disabled={ghealthSyncing} style={{width:"100%",background:"transparent",border:`1px solid ${T.div}`,color:T.text,padding:"9px 0",borderRadius:2,fontFamily:"'Barlow Condensed',sans-serif",fontWeight:700,fontSize:12,letterSpacing:"0.04em",cursor:ghealthSyncing?"default":"pointer",opacity:ghealthSyncing?0.5:1}}>
+            {ghealthSyncing?"SYNCING…":"SYNC TODAY'S DATA NOW"}
+          </button>
+        )}
+        {ghealthError&&<div style={{color:"#FF3B5C",fontSize:11,marginTop:8}}>{ghealthError}</div>}
+      </div>
 
       {/* Period selector */}
       <div style={{display:"flex",borderBottom:"1px solid #222",marginBottom:20}}>
@@ -4156,6 +4325,9 @@ export default function KataokaApp(){
   const [financeMonths,setFinanceMonths]=useState({});
   const [appNotes,setAppNotes]=useState("");
   const [apiKey,setApiKey]=useState("");
+  const [ghealthConnected,setGhealthConnected]=useState(false);
+  const [ghealthSyncing,setGhealthSyncing]=useState(false);
+  const [ghealthError,setGhealthError]=useState(null);
 
   useEffect(()=>{
     const load=async()=>{
@@ -4175,6 +4347,27 @@ export default function KataokaApp(){
     const link=document.createElement("link");
     link.href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@400;700;800;900&family=Barlow:wght@300;400;500&display=swap";
     link.rel="stylesheet";document.head.appendChild(link);
+
+    // Check if we're connected already
+    S.get("ghealth_tokens").then(t=>{if(t?.refresh_token)setGhealthConnected(true);});
+
+    // Handle OAuth redirect callback (Google sends ?code=... back to this URL)
+    const urlParams=new URLSearchParams(window.location.search);
+    const code=urlParams.get("code");
+    const oauthError=urlParams.get("error");
+    if(oauthError){
+      setGhealthError("Connection cancelled or denied");
+      window.history.replaceState({},"",window.location.pathname);
+    } else if(code){
+      ghealthExchangeCode(code).then(()=>{
+        setGhealthConnected(true);
+        setGhealthError(null);
+        window.history.replaceState({},"",window.location.pathname);
+      }).catch(e=>{
+        setGhealthError("Connection failed: "+e.message);
+        window.history.replaceState({},"",window.location.pathname);
+      });
+    }
   },[]);
 
   const T={
@@ -4197,6 +4390,38 @@ export default function KataokaApp(){
   const saveBarberIncome=async v=>{setBarberIncome(v);await S.set("barber_income",v);};
   const saveBarberDays=async v=>{setBarberDays(v);await S.set("barber_days",v);};
   const saveMorningLogs=async v=>{setMorningLogs(v);await S.set("morning_logs",v);};
+  const ghealthSyncToday=async()=>{
+    setGhealthSyncing(true);setGhealthError(null);
+    try{
+      const dateStr=todayStr();
+      const [sleep,rhr,hrv]=await Promise.all([
+        ghealthFetchSleep(dateStr),
+        ghealthFetchRestingHR(dateStr),
+        ghealthFetchHRV(dateStr),
+      ]);
+      if(!sleep&&!rhr&&!hrv){
+        setGhealthError("No data found for today yet — your Charge 6 may not have synced");
+        setGhealthSyncing(false);
+        return false;
+      }
+      const existing=morningLogs.find(l=>l.date===dateStr)||{date:dateStr};
+      const merged={
+        ...existing,
+        ...(sleep?{sleep:sleep.sleep,bedtime:sleep.bedtime,wakeTime:sleep.wakeTime}:{}),
+        ...(rhr?{restingHR:rhr}:{}),
+        ...(hrv?{hrv:hrv}:{}),
+      };
+      await saveMorningLogs([...morningLogs.filter(l=>l.date!==dateStr),merged]);
+      setGhealthSyncing(false);
+      return true;
+    }catch(e){
+      setGhealthError("Sync failed: "+e.message);
+      setGhealthSyncing(false);
+      return false;
+    }
+  };
+  const ghealthDoConnect=()=>ghealthConnect();
+  const ghealthDoDisconnect=async()=>{await ghealthDisconnect();setGhealthConnected(false);};
   const saveNightLogs=async v=>{setNightLogs(v);await S.set("night_logs",v);};
   const saveGoals=async v=>{setGoals(v);await S.set("goals",v);};
   const saveComingSoon=async v=>{setComingSoon(v);await S.set("coming_soon",v);};
@@ -4267,7 +4492,8 @@ export default function KataokaApp(){
   const ctx={T,dark,setDark,screen,screenData,go,back,tab,activeTab,
     templates,saveTemplates,workoutLogs,saveLogs,prs,checkPR,commitWorkout,resetAllData,resetPRs,
     barberWeeks,saveBarberWeeks,barberIncome,saveBarberIncome,barberDays,saveBarberDays,
-    morningLogs,saveMorningLogs,nightLogs,saveNightLogs,goals,saveGoals,comingSoon,saveComingSoon,userDOB,saveDOB,bw,saveBw,userName,saveUserName,quotes,saveQuotes,weeklyReviews,saveWeeklyReviews,soMeVideos,saveSoMeVideos,soMeFollowers,saveSoMeFollowers,habits,saveHabits,hrvLogs,saveHrvLogs,financeMonths,saveFinanceMonths,appNotes,saveAppNotes,apiKey,saveApiKey};
+    morningLogs,saveMorningLogs,nightLogs,saveNightLogs,goals,saveGoals,comingSoon,saveComingSoon,userDOB,saveDOB,bw,saveBw,userName,saveUserName,quotes,saveQuotes,weeklyReviews,saveWeeklyReviews,soMeVideos,saveSoMeVideos,soMeFollowers,saveSoMeFollowers,habits,saveHabits,hrvLogs,saveHrvLogs,financeMonths,saveFinanceMonths,appNotes,saveAppNotes,apiKey,saveApiKey,
+    ghealthConnected,ghealthSyncing,ghealthError,ghealthSyncToday,ghealthDoConnect,ghealthDoDisconnect};
 
   const SCREENS={home:HomeScreen,workout:WorkoutHome,"workout-log":LogChoose,"workout-edit-templates":EditTemplates,"workout-ranks":RankExplainerScreen,"workout-templates":TemplatePick,"workout-active":ActiveWorkout,"workout-history":WorkoutHistory,"workout-session":WorkoutSession,"workout-progress":ProgressTracker,"workout-create":CreateTemplate,"workout-exercise":ExerciseProgress,barber:BarberScreen,daily:DailyScreen,health:HealthScreen,goals:GoalsScreen,me:MeScreen,quotes:QuoteVaultScreen,some:SoMeScreen,financials:FinancialsScreen,physique:PhysiqueScreen};
   const Screen=SCREENS[screen]||HomeScreen;
