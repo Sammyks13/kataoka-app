@@ -91,6 +91,32 @@ const getDailyVerse = () => {
 const WCI = c => c===0?"☀️":c<=3?"🌤️":c<=48?"🌫️":c<=67?"🌧️":c<=77?"❄️":c<=82?"🌦️":"⛈️";
 const WCD = c => c===0?"Clear":c<=3?"Partly cloudy":c<=48?"Fog":c<=67?"Rain":c<=77?"Snow":c<=82?"Showers":"Storm";
 const uvInfo = uv => uv<=2?{c:"#39FF14",l:"Low"}:uv<=5?{c:"#FFD700",l:"Moderate"}:uv<=7?{c:"#FF6B35",l:"High"}:uv<=10?{c:"#FF3B5C",l:"Very High"}:{c:"#FF00FF",l:"Extreme"};
+// MET Norway (Yr) symbol_code → emoji + label. Symbol codes look like "partlycloudy_day", "rain", "snow", "heavysnow", "fog", "thunder", "clearsky_night" etc.
+const YR_ICON = code => {
+  if(!code)return "☀️";
+  if(code.includes("thunder"))return "⛈️";
+  if(code.includes("sleet"))return "🌨️";
+  if(code.includes("snow"))return "❄️";
+  if(code.includes("fog"))return "🌫️";
+  if(code.includes("rain")||code.includes("showers"))return "🌧️";
+  if(code.includes("cloudy")&&!code.includes("partly")&&!code.includes("fair"))return "☁️";
+  if(code.includes("partlycloudy")||code.includes("fair"))return code.includes("night")?"🌙":"🌤️";
+  if(code.includes("clearsky"))return code.includes("night")?"🌙":"☀️";
+  return "🌤️";
+};
+const YR_LABEL = code => {
+  if(!code)return "Clear";
+  if(code.includes("thunder"))return "Storm";
+  if(code.includes("sleet"))return "Sleet";
+  if(code.includes("snow"))return "Snow";
+  if(code.includes("fog"))return "Fog";
+  if(code.includes("showers"))return "Showers";
+  if(code.includes("rain"))return "Rain";
+  if(code.includes("cloudy")&&!code.includes("partly")&&!code.includes("fair"))return "Cloudy";
+  if(code.includes("partlycloudy")||code.includes("fair"))return "Partly cloudy";
+  if(code.includes("clearsky"))return "Clear";
+  return "Clear";
+};
 
 // ─── Muscle definitions ───────────────────────────────────────────────────────
 // Individual major muscles → front/back view. A muscle's rank reflects OVERALL strength:
@@ -182,14 +208,18 @@ const recovLabel = d => d===null?"—":d===0?"Today":d===1?"1d":d===2?"2d":`${d}
 // Weighted muscle rank — weighted average of all exercises contributing to this muscle,
 // judged against that muscle's appropriate category thresholds (not generic)
 const muscleRank = (muscle, prs, bw) => {
-  let bestRM=0;
+  let bestRM=0,bestPriority=0;
   for(const [k,pr] of Object.entries(prs)){
     const name=k.replace(/_/g," ");
     for(const {match,w} of EXERCISE_MUSCLE_WEIGHTS){
       if(match.test(name)&&w[muscle.key]){
-        // Weight the exercise's contribution by how primary it is for this muscle
-        const contribution=pr.rm*w[muscle.key];
-        if(contribution>bestRM)bestRM=contribution;
+        // Prefer the exercise that's most "primary" for this muscle (highest weight factor).
+        // Among exercises with similar primacy, take the highest actual RM.
+        const priority=w[muscle.key];
+        if(priority>bestPriority||(priority===bestPriority&&pr.rm>bestRM)){
+          bestPriority=priority;
+          bestRM=pr.rm;
+        }
         break;
       }
     }
@@ -674,8 +704,21 @@ function HomeScreen(){
   useEffect(()=>{
     const fetch_=(lat,lon,city)=>{
       setLoc(city||"Your location");
-      fetch(`https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current=temperature_2m,apparent_temperature,weathercode,uv_index&timezone=auto`)
-        .then(r=>r.json()).then(d=>setWeather(d.current)).catch(()=>{});
+      fetch(`https://api.met.no/weatherapi/locationforecast/2.0/compact?lat=${lat}&lon=${lon}`,{
+        headers:{"User-Agent":"KataokaApp/1.0 github.com/Sammyks13/kataoka-app"}
+      })
+        .then(r=>r.json())
+        .then(d=>{
+          const ts=d?.properties?.timeseries?.[0];
+          if(!ts)return;
+          const details=ts.data.instant.details;
+          const symbol=ts.data.next_1_hours?.summary?.symbol_code||ts.data.next_6_hours?.summary?.symbol_code||null;
+          setWeather({
+            temperature_2m:details.air_temperature,
+            symbol_code:symbol,
+            uv_index:details.ultraviolet_index_clear_sky||0,
+          });
+        }).catch(()=>{});
     };
     if(navigator.geolocation){
       navigator.geolocation.getCurrentPosition(
@@ -726,8 +769,8 @@ function HomeScreen(){
         {weather?(
           <>
             <span style={{fontFamily:"'Barlow Condensed',sans-serif",fontWeight:900,fontSize:22,lineHeight:1}}>{Math.round(weather.temperature_2m)}°</span>
-            <span style={{fontSize:16}}>{WCI(weather.weathercode)}</span>
-            <span style={{color:T.sub,fontSize:11,flex:1}}>{WCD(weather.weathercode)} · Feels {Math.round(weather.apparent_temperature)}°</span>
+            <span style={{fontSize:16}}>{YR_ICON(weather.symbol_code)}</span>
+            <span style={{color:T.sub,fontSize:11,flex:1}}>{YR_LABEL(weather.symbol_code)} · {loc}</span>
             <span style={{fontFamily:"'Barlow Condensed',sans-serif",fontWeight:900,fontSize:13,color:uv?.c}}>UV {Math.round(weather.uv_index||0)}</span>
           </>
         ):(
@@ -995,7 +1038,9 @@ function EditTemplates(){
     if(!tmpl){setSelectedId(null);return null;}
 
     const saveExEdit=async()=>{
-      await updateTemplate({...tmpl,exercises:tmpl.exercises.map((ex,i)=>i===editExIdx?{...ex,...exBuf,superset:exBuf.superset||null,failType:exBuf.failType||ex.failType||null}:ex)});
+      const origEx=tmpl.exercises[editExIdx];
+      const finalFailType="failType" in exBuf?exBuf.failType:(origEx?.failType||null);
+      await updateTemplate({...tmpl,exercises:tmpl.exercises.map((ex,i)=>i===editExIdx?{...ex,...exBuf,superset:exBuf.superset||null,failType:finalFailType}:ex)});
       setEditExIdx(null);setExBuf({});
     };
     const deleteEx=async i=>updateTemplate({...tmpl,exercises:tmpl.exercises.filter((_,j)=>j!==i)});
