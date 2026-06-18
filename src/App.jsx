@@ -275,7 +275,7 @@ const S = {
 };
 
 // ─── Google Health OAuth2 (PKCE) ───────────────────────────────────────────────
-const GHEALTH_CLIENT_ID="1096396435654-e21c0p9eqor0nmb62qn6r3g6j7pd4lgu.apps.googleusercontent.com";
+const GHEALTH_CLIENT_ID="1096396435654-bvrnhrgsdtc1u6o3htk5a16tucr67dop.apps.googleusercontent.com";
 const GHEALTH_REDIRECT_URI=typeof window!=="undefined"?window.location.origin:"https://kataoka-app.vercel.app";
 const GHEALTH_SCOPES=[
   "https://www.googleapis.com/auth/googlehealth.sleep.readonly",
