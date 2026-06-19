@@ -3432,34 +3432,52 @@ function HealthScreen(){
           )}
 
           {/* Resting Heart Rate chart (from Google Health) */}
-          {rhrData.length>1&&(
+          {rhrData.length>=1&&(
             <div style={{background:T.card,padding:"16px 8px 8px",marginBottom:20}}>
               <div style={{...H,fontSize:10,color:"#555",paddingLeft:10,marginBottom:8,letterSpacing:"0.1em"}}>RESTING HEART RATE (bpm)</div>
               <ResponsiveContainer width="100%" height={150}>
-                <LineChart data={rhrData}>
-                  <XAxis dataKey="date" tick={{fill:"#555",fontSize:9}} axisLine={false} tickLine={false}/>
-                  <YAxis tick={{fill:"#555",fontSize:10}} axisLine={false} tickLine={false} width={28} domain={['dataMin-5','dataMax+5']}/>
-                  <Tooltip {...TT}/>
-                  <Line type="monotone" dataKey="restingHR" stroke="#FF3B5C" strokeWidth={2.5} dot={{fill:"#FF3B5C",r:3}} activeDot={{r:5}} connectNulls={true}/>
-                </LineChart>
+                {rhrData.length===1?(
+                  <BarChart data={rhrData}>
+                    <XAxis dataKey="date" tick={{fill:"#555",fontSize:9}} axisLine={false} tickLine={false}/>
+                    <YAxis tick={{fill:"#555",fontSize:10}} axisLine={false} tickLine={false} width={28} domain={[0,'dataMax+10']}/>
+                    <Tooltip {...TT}/>
+                    <Bar dataKey="restingHR" fill="#FF3B5C" radius={[2,2,0,0]}/>
+                  </BarChart>
+                ):(
+                  <LineChart data={rhrData}>
+                    <XAxis dataKey="date" tick={{fill:"#555",fontSize:9}} axisLine={false} tickLine={false}/>
+                    <YAxis tick={{fill:"#555",fontSize:10}} axisLine={false} tickLine={false} width={28} domain={['dataMin-5','dataMax+5']}/>
+                    <Tooltip {...TT}/>
+                    <Line type="monotone" dataKey="restingHR" stroke="#FF3B5C" strokeWidth={2.5} dot={{fill:"#FF3B5C",r:3}} activeDot={{r:5}} connectNulls={true}/>
+                  </LineChart>
+                )}
               </ResponsiveContainer>
-              <div style={{color:"#555",fontSize:10,paddingLeft:10,marginTop:6}}>Avg: {avg(rhrData.map(d=>({restingHR:d.restingHR})),'restingHR')} bpm over {rhrData.length} day{rhrData.length===1?"":"s"}</div>
+              <div style={{color:"#555",fontSize:10,paddingLeft:10,marginTop:6}}>Avg: {(rhrData.reduce((s,d)=>s+(d.restingHR||0),0)/rhrData.length).toFixed(0)} bpm · {rhrData.length} day{rhrData.length===1?"":"s"}</div>
             </div>
           )}
 
           {/* HRV chart (from Google Health) */}
-          {hrvData.length>1&&(
+          {hrvData.length>=1&&(
             <div style={{background:T.card,padding:"16px 8px 8px",marginBottom:20}}>
               <div style={{...H,fontSize:10,color:"#555",paddingLeft:10,marginBottom:8,letterSpacing:"0.1em"}}>HEART RATE VARIABILITY (ms)</div>
               <ResponsiveContainer width="100%" height={150}>
-                <LineChart data={hrvData}>
-                  <XAxis dataKey="date" tick={{fill:"#555",fontSize:9}} axisLine={false} tickLine={false}/>
-                  <YAxis tick={{fill:"#555",fontSize:10}} axisLine={false} tickLine={false} width={28} domain={['dataMin-5','dataMax+5']}/>
-                  <Tooltip {...TT}/>
-                  <Line type="monotone" dataKey="hrv" stroke="#A855F7" strokeWidth={2.5} dot={{fill:"#A855F7",r:3}} activeDot={{r:5}} connectNulls={true}/>
-                </LineChart>
+                {hrvData.length===1?(
+                  <BarChart data={hrvData}>
+                    <XAxis dataKey="date" tick={{fill:"#555",fontSize:9}} axisLine={false} tickLine={false}/>
+                    <YAxis tick={{fill:"#555",fontSize:10}} axisLine={false} tickLine={false} width={28} domain={[0,'dataMax+10']}/>
+                    <Tooltip {...TT}/>
+                    <Bar dataKey="hrv" fill="#A855F7" radius={[2,2,0,0]}/>
+                  </BarChart>
+                ):(
+                  <LineChart data={hrvData}>
+                    <XAxis dataKey="date" tick={{fill:"#555",fontSize:9}} axisLine={false} tickLine={false}/>
+                    <YAxis tick={{fill:"#555",fontSize:10}} axisLine={false} tickLine={false} width={28} domain={['dataMin-5','dataMax+5']}/>
+                    <Tooltip {...TT}/>
+                    <Line type="monotone" dataKey="hrv" stroke="#A855F7" strokeWidth={2.5} dot={{fill:"#A855F7",r:3}} activeDot={{r:5}} connectNulls={true}/>
+                  </LineChart>
+                )}
               </ResponsiveContainer>
-              <div style={{color:"#555",fontSize:10,paddingLeft:10,marginTop:6}}>Avg: {avg(hrvData.map(d=>({hrv:d.hrv})),'hrv')} ms over {hrvData.length} day{hrvData.length===1?"":"s"}</div>
+              <div style={{color:"#555",fontSize:10,paddingLeft:10,marginTop:6}}>Avg: {(hrvData.reduce((s,d)=>s+(d.hrv||0),0)/hrvData.length).toFixed(0)} ms · {hrvData.length} day{hrvData.length===1?"":"s"}</div>
             </div>
           )}
 
@@ -3614,7 +3632,7 @@ function PhysiqueScreen(){
   const imgInput=(label,value,setter)=>(
     <label style={{cursor:"pointer",border:`1px solid ${value?"#39FF14":"#222"}`,padding:"6px 10px",display:"flex",alignItems:"center",gap:6,...H,fontSize:10,color:value?"#39FF14":T.sub,letterSpacing:"0.04em",flex:1}}>
       📷 {value?label+" ✓":label}
-      <input type="file" accept="image/*" capture="environment" style={{display:"none"}} onChange={async e=>{
+      <input type="file" accept="image/*" style={{display:"none"}} onChange={async e=>{
         if(e.target.files[0]){const b64=await compressImage(e.target.files[0]);setter(b64);}
       }}/>
     </label>
@@ -3787,13 +3805,13 @@ function PhysiqueScreen(){
                     <div style={{display:"flex",gap:8,marginBottom:10}}>
                       <label style={{cursor:"pointer",border:`1px solid ${editBuf.front?"#39FF14":"#222"}`,padding:"6px 10px",...H,fontSize:10,color:editBuf.front?"#39FF14":T.sub,flex:1}}>
                         📷 {editBuf.front?"FRONT ✓":"FRONT"}
-                        <input type="file" accept="image/*" capture="environment" style={{display:"none"}} onChange={async e=>{
+                        <input type="file" accept="image/*" style={{display:"none"}} onChange={async e=>{
                           if(e.target.files[0]){const b64=await compressImage(e.target.files[0]);setEditBuf(b=>({...b,front:b64}));}
                         }}/>
                       </label>
                       <label style={{cursor:"pointer",border:`1px solid ${editBuf.back?"#39FF14":"#222"}`,padding:"6px 10px",...H,fontSize:10,color:editBuf.back?"#39FF14":T.sub,flex:1}}>
                         📷 {editBuf.back?"BACK ✓":"BACK"}
-                        <input type="file" accept="image/*" capture="environment" style={{display:"none"}} onChange={async e=>{
+                        <input type="file" accept="image/*" style={{display:"none"}} onChange={async e=>{
                           if(e.target.files[0]){const b64=await compressImage(e.target.files[0]);setEditBuf(b=>({...b,back:b64}));}
                         }}/>
                       </label>
