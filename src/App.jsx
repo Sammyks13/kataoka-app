@@ -3046,7 +3046,7 @@ function DailyScreen(){
 
 // ─── HEALTH HEALTH ───────────────────────────────────────────────────────────────────
 function HealthScreen(){
-  const {T,morningLogs,nightLogs,workoutLogs,goals,apiKey,ghealthConnected,ghealthSyncing,ghealthError,ghealthSyncToday,ghealthSyncWeek,ghealthDoConnect,ghealthDoDisconnect}=useContext(Ctx);
+  const {T,morningLogs,nightLogs,workoutLogs,goals,apiKey,ghealthConnected,ghealthSyncing,ghealthError,ghealthDebug,ghealthSyncToday,ghealthSyncWeek,ghealthDoConnect,ghealthDoDisconnect}=useContext(Ctx);
   const [period,setPeriod]=useState(30);
   const [insights,setInsights]=useState(null);
   const [aiLoading,setAiLoading]=useState(false);
@@ -3372,6 +3372,7 @@ function HealthScreen(){
         )}
         {weekSyncResult&&<div style={{color:"#39FF14",fontSize:11,marginTop:8}}>Filled {weekSyncResult} day{weekSyncResult===1?"":"s"} from the past week</div>}
         {ghealthError&&<div style={{color:"#FF3B5C",fontSize:11,marginTop:8}}>{ghealthError}</div>}
+        {ghealthDebug&&<div style={{color:"#555",fontSize:10,marginTop:8,fontFamily:"monospace",wordBreak:"break-all"}}>DEBUG: {JSON.stringify(ghealthDebug)}</div>}
       </div>
 
       {/* Period selector */}
@@ -4588,6 +4589,7 @@ export default function KataokaApp(){
   const [ghealthConnected,setGhealthConnected]=useState(false);
   const [ghealthSyncing,setGhealthSyncing]=useState(false);
   const [ghealthError,setGhealthError]=useState(null);
+  const [ghealthDebug,setGhealthDebug]=useState(null);
 
   useEffect(()=>{
     const load=async()=>{
@@ -4657,7 +4659,8 @@ export default function KataokaApp(){
       ghealthFetchRestingHR(dateStr),
       ghealthFetchHRV(dateStr),
     ]);
-    if(!sleep&&!rhr&&!hrv)return{found:false,log:null};
+    setGhealthDebug({date:dateStr,sleep:sleep?{hours:sleep.sleep,bedtime:sleep.bedtime}:"null",rhr:rhr??null,hrv:hrv??null});
+    if(!sleep&&rhr==null&&hrv==null)return{found:false,log:null};
     const existing=currentLogs.find(l=>l.date===dateStr)||{date:dateStr};
     const merged={
       ...existing,
@@ -4666,8 +4669,8 @@ export default function KataokaApp(){
         ...(sleep.sleepStages?{sleepStages:sleep.sleepStages}:{}),
         ...(sleep.minutesAsleep!=null?{minutesAsleep:sleep.minutesAsleep}:{}),
       }:{}),
-      ...(rhr?{restingHR:rhr}:{}),
-      ...(hrv?{hrv:hrv}:{}),
+      ...(rhr!=null?{restingHR:rhr}:{}),
+      ...(hrv!=null?{hrv:hrv}:{}),
     };
     return{found:true,log:merged};
   };
@@ -4801,7 +4804,7 @@ export default function KataokaApp(){
     templates,saveTemplates,workoutLogs,saveLogs,prs,checkPR,commitWorkout,resetAllData,resetPRs,
     barberWeeks,saveBarberWeeks,barberIncome,saveBarberIncome,barberDays,saveBarberDays,
     morningLogs,saveMorningLogs,nightLogs,saveNightLogs,goals,saveGoals,comingSoon,saveComingSoon,userDOB,saveDOB,bw,saveBw,userName,saveUserName,quotes,saveQuotes,weeklyReviews,saveWeeklyReviews,soMeVideos,saveSoMeVideos,soMeFollowers,saveSoMeFollowers,habits,saveHabits,hrvLogs,saveHrvLogs,financeMonths,saveFinanceMonths,appNotes,saveAppNotes,apiKey,saveApiKey,
-    ghealthConnected,ghealthSyncing,ghealthError,ghealthSyncToday,ghealthSyncWeek,ghealthDoConnect,ghealthDoDisconnect};
+    ghealthConnected,ghealthSyncing,ghealthError,ghealthDebug,ghealthSyncToday,ghealthSyncWeek,ghealthDoConnect,ghealthDoDisconnect};
 
   const SCREENS={home:HomeScreen,workout:WorkoutHome,"workout-log":LogChoose,"workout-edit-templates":EditTemplates,"workout-ranks":RankExplainerScreen,"workout-templates":TemplatePick,"workout-active":ActiveWorkout,"workout-history":WorkoutHistory,"workout-session":WorkoutSession,"workout-progress":ProgressTracker,"workout-create":CreateTemplate,"workout-exercise":ExerciseProgress,barber:BarberScreen,daily:DailyScreen,health:HealthScreen,goals:GoalsScreen,me:MeScreen,quotes:QuoteVaultScreen,some:SoMeScreen,financials:FinancialsScreen,physique:PhysiqueScreen};
   const Screen=SCREENS[screen]||HomeScreen;
