@@ -1,5 +1,5 @@
 import { useState, useEffect, createContext, useContext, useRef } from "react";
-import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, BarChart, Bar } from "recharts";
+import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, BarChart, Bar, AreaChart, Area, Legend } from "recharts";
 
 
 const VIDEO_FORMATS=["DEEP DIVES / UO : MOMENTS","DEEP DIVES / UO : CONCEPTS","DEEP DIVES / UO : ORIGINS","OBJECTS / OBJEKTER","THE EDIT / FORMATET","THE VERDICT / DOMSTOLEN","KATAOKA Sample Walkthrough","KATAOKA Collection Concept","KATAOKA Collection Walkthrough"];
@@ -208,28 +208,25 @@ const recovLabel = d => d===null?"—":d===0?"Today":d===1?"1d":d===2?"2d":`${d}
 // Weighted muscle rank — weighted average of all exercises contributing to this muscle,
 // judged against that muscle's appropriate category thresholds (not generic)
 const muscleRank = (muscle, prs, bw) => {
-  let bestRM=0,bestPriority=0;
+  let bestIdx=-1,bestRM=0;
   for(const [k,pr] of Object.entries(prs)){
     const name=k.replace(/_/g," ");
-    for(const {match,w} of EXERCISE_MUSCLE_WEIGHTS){
-      if(match.test(name)&&w[muscle.key]){
-        // Prefer the exercise that's most "primary" for this muscle (highest weight factor).
-        // Among exercises with similar primacy, take the highest actual RM.
-        const priority=w[muscle.key];
-        if(priority>bestPriority||(priority===bestPriority&&pr.rm>bestRM)){
-          bestPriority=priority;
-          bestRM=pr.rm;
-        }
-        break;
-      }
-    }
+    // Find this exercise's own category (for proper thresholds), via CATEGORY_PATTERNS,
+    // and confirm it actually contributes to this muscle via EXERCISE_MUSCLE_WEIGHTS.
+    const muscleMatch=EXERCISE_MUSCLE_WEIGHTS.find(({match,w})=>match.test(name)&&w[muscle.key]);
+    if(!muscleMatch)continue;
+    const catMatch=CATEGORY_PATTERNS.find(({match})=>match.test(name));
+    const cat=catMatch?catMatch.cat:muscle.cat;
+    const thresh=CATEGORY_THRESHOLDS[cat]||CATEGORY_THRESHOLDS.generic;
+    const r=pr.rm/bw;
+    const idx=r>=thresh[4]?4:r>=thresh[3]?3:r>=thresh[2]?2:r>=thresh[1]?1:r>=thresh[0]?0:-1;
+    // This exercise's tier, judged fairly against its own category — take whichever exercise
+    // gives this muscle its best-earned tier (e.g. a strong bench beats a so-so fly).
+    if(idx>bestIdx){bestIdx=idx;bestRM=pr.rm;}
   }
-  if(bestRM===0)return null;
-  const thresh=CATEGORY_THRESHOLDS[muscle.cat]||CATEGORY_THRESHOLDS.generic;
-  const r=bestRM/bw;
-  const idx=r>=thresh[4]?4:r>=thresh[3]?3:r>=thresh[2]?2:r>=thresh[1]?1:r>=thresh[0]?0:-1;
-  const tier=idx>=0?SL_TIERS[idx]:null;
-  return{n:tier?tier.n:"UNTRAINED",c:tier?tier.c:"#4B5563",pct:tier?tier.pct:0,rm:Math.round(bestRM)};
+  if(bestIdx<0)return bestRM>0?{n:"UNTRAINED",c:"#4B5563",pct:0,rm:Math.round(bestRM)}:null;
+  const tier=SL_TIERS[bestIdx];
+  return{n:tier.n,c:tier.c,pct:tier.pct,rm:Math.round(bestRM)};
 };
 const muscleRecovery = (muscle, logs) => {
   for(const log of [...logs].reverse()){
@@ -377,45 +374,92 @@ const ghealthGetValidToken=async()=>{
 const ghealthDisconnect=async()=>{await S.set("ghealth_tokens",null);};
 
 // Fetch sleep data for a given date (YYYY-MM-DD), returns hours slept + bed/wake times, or null
+// Fetch sleep data across a date range [startDateStr, endDateStr] inclusive.
+// Returns a map of dateStr -> {sleep, bedtime, wakeTime}, keyed by the date the sleep *ended* on
+// (i.e. the morning you woke up), which is what morning logs are keyed by.
+const ghealthFetchSleepRange=async(startDateStr,endDateStr)=>{
+  const token=await ghealthGetValidToken();
+  if(!token)return{};
+  const url=`https://health.googleapis.com/v4/users/me/dataTypes/sleep/dataPoints?filter=sleep.interval.civil_end_time >= "${startDateStr}" AND sleep.interval.civil_end_time <= "${endDateStr}T23:59:59"&pageSize=20`;
+  const res=await fetch(url,{headers:{Authorization:`Bearer ${token}`}});
+  if(!res.ok)return{};
+  const data=await res.json();
+  const out={};
+  for(const point of(data?.dataPoints||[])){
+    if(!point?.sleep)continue;
+    const start=new Date(point.sleep.interval.startTime);
+    const end=new Date(point.sleep.interval.endTime);
+    const dayKey=end.toISOString().split("T")[0]; // keyed by wake-up date
+    const hours=Math.round(((end-start)/3600000)*10)/10;
+    // Extract sleep stage breakdown if present (point.sleep.summary.stagesSummary)
+    const stagesArr=point.sleep.summary?.stagesSummary||[];
+    const stages={deep:0,rem:0,light:0,awake:0};
+    stagesArr.forEach(s=>{
+      const mins=parseInt(s.minutes)||0;
+      const t=(s.type||"").toUpperCase();
+      if(t==="DEEP")stages.deep=mins;
+      else if(t==="REM")stages.rem=mins;
+      else if(t==="LIGHT")stages.light=mins;
+      else if(t==="AWAKE")stages.awake=mins;
+    });
+    const hasStages=stagesArr.length>0;
+    const minutesAsleep=point.sleep.summary?.minutesAsleep?parseInt(point.sleep.summary.minutesAsleep):null;
+    // If multiple sleep sessions land on the same day, keep the longest one
+    if(!out[dayKey]||hours>out[dayKey].sleep){
+      out[dayKey]={
+        sleep:hours,
+        bedtime:start.toTimeString().slice(0,5),
+        wakeTime:end.toTimeString().slice(0,5),
+        ...(hasStages?{sleepStages:stages}:{}),
+        ...(minutesAsleep!=null?{minutesAsleep}:{}),
+      };
+    }
+  }
+  return out;
+};
 const ghealthFetchSleep=async(dateStr)=>{
-  const token=await ghealthGetValidToken();
-  if(!token)return null;
-  const url=`https://health.googleapis.com/v4/users/me/dataTypes/sleep/dataPoints?filter=sleep.interval.civil_end_time >= "${dateStr}"&pageSize=5`;
-  const res=await fetch(url,{headers:{Authorization:`Bearer ${token}`}});
-  if(!res.ok)return null;
-  const data=await res.json();
-  const point=data?.dataPoints?.[0];
-  if(!point?.sleep)return null;
-  const start=new Date(point.sleep.interval.startTime);
-  const end=new Date(point.sleep.interval.endTime);
-  const hours=Math.round(((end-start)/3600000)*10)/10;
-  return{
-    sleep:hours,
-    bedtime:start.toTimeString().slice(0,5),
-    wakeTime:end.toTimeString().slice(0,5),
-  };
+  const range=await ghealthFetchSleepRange(dateStr,dateStr);
+  return range[dateStr]||null;
 };
 
-// Fetch resting heart rate for a given date
+// Fetch resting heart rate across a date range. Returns map of dateStr -> value.
+const ghealthFetchRestingHRRange=async(startDateStr,endDateStr)=>{
+  const token=await ghealthGetValidToken();
+  if(!token)return{};
+  const url=`https://health.googleapis.com/v4/users/me/dataTypes/dailyRestingHeartRate/dataPoints?filter=dailyRestingHeartRate.date >= "${startDateStr}" AND dailyRestingHeartRate.date <= "${endDateStr}"&pageSize=20`;
+  const res=await fetch(url,{headers:{Authorization:`Bearer ${token}`}});
+  if(!res.ok)return{};
+  const data=await res.json();
+  const out={};
+  for(const point of(data?.dataPoints||[])){
+    const d=point?.dailyRestingHeartRate;
+    if(d?.date&&d?.value!=null)out[d.date]=d.value;
+  }
+  return out;
+};
 const ghealthFetchRestingHR=async(dateStr)=>{
-  const token=await ghealthGetValidToken();
-  if(!token)return null;
-  const url=`https://health.googleapis.com/v4/users/me/dataTypes/dailyRestingHeartRate/dataPoints?filter=dailyRestingHeartRate.date = "${dateStr}"&pageSize=1`;
-  const res=await fetch(url,{headers:{Authorization:`Bearer ${token}`}});
-  if(!res.ok)return null;
-  const data=await res.json();
-  return data?.dataPoints?.[0]?.dailyRestingHeartRate?.value||null;
+  const range=await ghealthFetchRestingHRRange(dateStr,dateStr);
+  return range[dateStr]||null;
 };
 
-// Fetch HRV for a given date
-const ghealthFetchHRV=async(dateStr)=>{
+// Fetch HRV across a date range. Returns map of dateStr -> value.
+const ghealthFetchHRVRange=async(startDateStr,endDateStr)=>{
   const token=await ghealthGetValidToken();
-  if(!token)return null;
-  const url=`https://health.googleapis.com/v4/users/me/dataTypes/dailyHeartRateVariability/dataPoints?filter=dailyHeartRateVariability.date = "${dateStr}"&pageSize=1`;
+  if(!token)return{};
+  const url=`https://health.googleapis.com/v4/users/me/dataTypes/dailyHeartRateVariability/dataPoints?filter=dailyHeartRateVariability.date >= "${startDateStr}" AND dailyHeartRateVariability.date <= "${endDateStr}"&pageSize=20`;
   const res=await fetch(url,{headers:{Authorization:`Bearer ${token}`}});
-  if(!res.ok)return null;
+  if(!res.ok)return{};
   const data=await res.json();
-  return data?.dataPoints?.[0]?.dailyHeartRateVariability?.value||null;
+  const out={};
+  for(const point of(data?.dataPoints||[])){
+    const d=point?.dailyHeartRateVariability;
+    if(d?.date&&d?.value!=null)out[d.date]=d.value;
+  }
+  return out;
+};
+const ghealthFetchHRV=async(dateStr)=>{
+  const range=await ghealthFetchHRVRange(dateStr,dateStr);
+  return range[dateStr]||null;
 };
 
 // ─── Ranks ────────────────────────────────────────────────────────────────────
@@ -2984,10 +3028,11 @@ function DailyScreen(){
 
 // ─── HEALTH HEALTH ───────────────────────────────────────────────────────────────────
 function HealthScreen(){
-  const {T,morningLogs,nightLogs,workoutLogs,goals,apiKey,ghealthConnected,ghealthSyncing,ghealthError,ghealthSyncToday,ghealthDoConnect,ghealthDoDisconnect}=useContext(Ctx);
+  const {T,morningLogs,nightLogs,workoutLogs,goals,apiKey,ghealthConnected,ghealthSyncing,ghealthError,ghealthSyncToday,ghealthSyncWeek,ghealthDoConnect,ghealthDoDisconnect}=useContext(Ctx);
   const [period,setPeriod]=useState(30);
   const [insights,setInsights]=useState(null);
   const [aiLoading,setAiLoading]=useState(false);
+  const [weekSyncResult,setWeekSyncResult]=useState(null);
   const H={fontFamily:"'Barlow Condensed',sans-serif",fontWeight:900,textTransform:"uppercase"};
 
   // Filter + sort logs for period
@@ -2999,8 +3044,15 @@ function HealthScreen(){
   // Chart data
   const chartData=ml.map(l=>({
     date:new Date(l.date+'T12:00:00').toLocaleDateString("en-GB",{day:"numeric",month:"short"}),
-    sleep:l.sleep, energy:l.energy, mood:l.mood
+    sleep:l.sleep, energy:l.energy, mood:l.mood,
+    restingHR:l.restingHR||null, hrv:l.hrv||null,
+    deep:l.sleepStages?.deep||null, rem:l.sleepStages?.rem||null,
+    light:l.sleepStages?.light||null, awake:l.sleepStages?.awake||null,
   }));
+  // Subset with at least one RHR/HRV/stage point, for charts that shouldn't render on all-null data
+  const rhrData=chartData.filter(d=>d.restingHR!=null);
+  const hrvData=chartData.filter(d=>d.hrv!=null);
+  const stagesData=chartData.filter(d=>d.deep!=null||d.rem!=null||d.light!=null||d.awake!=null);
 
   // Linear regression helper
   const linReg=vals=>{
@@ -3231,7 +3283,7 @@ function HealthScreen(){
         daysLeft
       }));
       const payload=JSON.stringify({
-        morning:sortedMl.map(l=>({d:l.date,s:l.sleep,e:l.energy,m:l.mood})),
+        morning:sortedMl.map(l=>({d:l.date,s:l.sleep,e:l.energy,m:l.mood,rhr:l.restingHR||null,hrv:l.hrv||null,deepMin:l.sleepStages?.deep||null,remMin:l.sleepStages?.rem||null,lightMin:l.sleepStages?.light||null,awakeMin:l.sleepStages?.awake||null})),
         night:nl.map(l=>({d:l.date,e:l.energy,m:l.mood,w:l.win,f:l.fail})),
         calendarCompletion:calCompletion,
         sleepVariance:sleepVar,
@@ -3248,7 +3300,7 @@ function HealthScreen(){
         moodVsBarberDayCompletion:moodVsBarberDayCompletion,
         goalPace:goalPace
       });
-      const txt=await aiPost(apiKey,{max_tokens:1800,system:"You are a personal performance analyst. Return ONLY a valid JSON array of 8-10 insights, no duplicates. Each: {type:'correlation'|'trend'|'warning'|'positive'|'calendar'|'workout'|'goal', title:'max 5 words', body:'1-2 sentences, exact numbers only — sleep hours, mood scores, percentages, weights, RPE.'}. Cover in priority order: (1) mood vs session difficulty — does mood score predict how hard the session feels?, (2) mood vs general productivity — at what mood level does overall calendar completion drop?, (3) mood vs school/study event completion specifically — is there a threshold?, (4) mood vs completion on workout days — does mood affect how much gets done after training?, (5) mood vs completion on barbershop days — does mood affect post-work productivity?, (6) sleep vs session difficulty — does low sleep make sessions harder or weaker?, (7) for each event in sleepVsEventCompletion find the actual sleep threshold where completion drops — do not assume 7h for all, name the event and threshold, (8) which exercises show biggest weight drop or RPE increase on low-sleep days, (9) session difficulty → next-day calendar completion, (10) goal pace — look at each goal's pctDone and daysLeft. If any goal is ahead of pace to hit the Dec 31 2026 target early, do NOT just say 'consider raising it' — tell the user they are sandbagging and their target is too soft, then give a specific significantly higher number they should actually be aiming for. Be direct, no softening.",
+      const txt=await aiPost(apiKey,{max_tokens:1800,system:"You are a personal performance analyst. Return ONLY a valid JSON array of 8-10 insights, no duplicates. Each: {type:'correlation'|'trend'|'warning'|'positive'|'calendar'|'workout'|'goal', title:'max 5 words', body:'1-2 sentences, exact numbers only — sleep hours, mood scores, percentages, weights, RPE.'}. Cover in priority order: (1) mood vs session difficulty — does mood score predict how hard the session feels?, (2) mood vs general productivity — at what mood level does overall calendar completion drop?, (3) mood vs school/study event completion specifically — is there a threshold?, (4) mood vs completion on workout days — does mood affect how much gets done after training?, (5) mood vs completion on barbershop days — does mood affect post-work productivity?, (6) sleep vs session difficulty — does low sleep make sessions harder or weaker?, (7) for each event in sleepVsEventCompletion find the actual sleep threshold where completion drops — do not assume 7h for all, name the event and threshold, (8) which exercises show biggest weight drop or RPE increase on low-sleep days, (9) session difficulty → next-day calendar completion, (10) goal pace — look at each goal's pctDone and daysLeft. If any goal is ahead of pace to hit the Dec 31 2026 target early, do NOT just say 'consider raising it' — tell the user they are sandbagging and their target is too soft, then give a specific significantly higher number they should actually be aiming for. (11) resting heart rate trend — is rhr in the morning data trending up or down over the period, and does it correlate with sleep hours or session difficulty the day before? Elevated RHR after hard sessions or low sleep is a recovery signal worth flagging. (12) HRV trend — is hrv declining over time (a sign of accumulated fatigue/overtraining) or stable/rising? Does it dip after specific session types or low-sleep nights? (13) sleep stage composition — is deep sleep or REM minutes trending down even if total sleep hours look fine? Flag if total hours are stable but deep/REM share is shrinking, since that's a hidden recovery problem total hours alone won't show. Be direct, no softening.",
         messages:[{role:"user",content:"Analyze: "+payload}]
       });
       setInsights(JSON.parse(txt.replace(/```json|```/g,"").trim()));
@@ -3291,10 +3343,16 @@ function HealthScreen(){
           )}
         </div>
         {ghealthConnected&&(
-          <button onClick={ghealthSyncToday} disabled={ghealthSyncing} style={{width:"100%",background:"transparent",border:`1px solid ${T.div}`,color:T.text,padding:"9px 0",borderRadius:2,fontFamily:"'Barlow Condensed',sans-serif",fontWeight:700,fontSize:12,letterSpacing:"0.04em",cursor:ghealthSyncing?"default":"pointer",opacity:ghealthSyncing?0.5:1}}>
-            {ghealthSyncing?"SYNCING…":"SYNC TODAY'S DATA NOW"}
-          </button>
+          <div style={{display:"flex",gap:8}}>
+            <button onClick={ghealthSyncToday} disabled={ghealthSyncing} style={{flex:1,background:"transparent",border:`1px solid ${T.div}`,color:T.text,padding:"9px 0",borderRadius:2,fontFamily:"'Barlow Condensed',sans-serif",fontWeight:700,fontSize:12,letterSpacing:"0.04em",cursor:ghealthSyncing?"default":"pointer",opacity:ghealthSyncing?0.5:1}}>
+              {ghealthSyncing?"SYNCING…":"SYNC TODAY"}
+            </button>
+            <button onClick={async()=>{setWeekSyncResult(null);const r=await ghealthSyncWeek();if(r)setWeekSyncResult(r);}} disabled={ghealthSyncing} style={{flex:1,background:"transparent",border:`1px solid ${T.div}`,color:T.text,padding:"9px 0",borderRadius:2,fontFamily:"'Barlow Condensed',sans-serif",fontWeight:700,fontSize:12,letterSpacing:"0.04em",cursor:ghealthSyncing?"default":"pointer",opacity:ghealthSyncing?0.5:1}}>
+              {ghealthSyncing?"SYNCING…":"SYNC THIS WEEK"}
+            </button>
+          </div>
         )}
+        {weekSyncResult&&<div style={{color:"#39FF14",fontSize:11,marginTop:8}}>Filled {weekSyncResult} day{weekSyncResult===1?"":"s"} from the past week</div>}
         {ghealthError&&<div style={{color:"#FF3B5C",fontSize:11,marginTop:8}}>{ghealthError}</div>}
       </div>
 
@@ -3360,6 +3418,62 @@ function HealthScreen(){
               <div style={{display:"flex",gap:14,paddingLeft:10,marginTop:4}}>
                 <div style={{display:"flex",alignItems:"center",gap:5}}><div style={{width:12,height:2,background:"#39FF14"}}/><span style={{color:"#555",fontSize:10}}>Energy</span></div>
                 <div style={{display:"flex",alignItems:"center",gap:5}}><div style={{width:12,height:2,background:"#FF6B35"}}/><span style={{color:"#555",fontSize:10}}>Mood</span></div>
+              </div>
+            </div>
+          )}
+
+          {/* Resting Heart Rate chart (from Google Health) */}
+          {rhrData.length>1&&(
+            <div style={{background:T.card,padding:"16px 8px 8px",marginBottom:20}}>
+              <div style={{...H,fontSize:10,color:"#555",paddingLeft:10,marginBottom:8,letterSpacing:"0.1em"}}>RESTING HEART RATE (bpm)</div>
+              <ResponsiveContainer width="100%" height={150}>
+                <LineChart data={rhrData}>
+                  <XAxis dataKey="date" tick={{fill:"#555",fontSize:9}} axisLine={false} tickLine={false}/>
+                  <YAxis tick={{fill:"#555",fontSize:10}} axisLine={false} tickLine={false} width={28} domain={['dataMin-5','dataMax+5']}/>
+                  <Tooltip {...TT}/>
+                  <Line type="monotone" dataKey="restingHR" stroke="#FF3B5C" strokeWidth={2.5} dot={{fill:"#FF3B5C",r:3}} activeDot={{r:5}} connectNulls={true}/>
+                </LineChart>
+              </ResponsiveContainer>
+              <div style={{color:"#555",fontSize:10,paddingLeft:10,marginTop:6}}>Avg: {avg(rhrData.map(d=>({restingHR:d.restingHR})),'restingHR')} bpm over {rhrData.length} day{rhrData.length===1?"":"s"}</div>
+            </div>
+          )}
+
+          {/* HRV chart (from Google Health) */}
+          {hrvData.length>1&&(
+            <div style={{background:T.card,padding:"16px 8px 8px",marginBottom:20}}>
+              <div style={{...H,fontSize:10,color:"#555",paddingLeft:10,marginBottom:8,letterSpacing:"0.1em"}}>HEART RATE VARIABILITY (ms)</div>
+              <ResponsiveContainer width="100%" height={150}>
+                <LineChart data={hrvData}>
+                  <XAxis dataKey="date" tick={{fill:"#555",fontSize:9}} axisLine={false} tickLine={false}/>
+                  <YAxis tick={{fill:"#555",fontSize:10}} axisLine={false} tickLine={false} width={28} domain={['dataMin-5','dataMax+5']}/>
+                  <Tooltip {...TT}/>
+                  <Line type="monotone" dataKey="hrv" stroke="#A855F7" strokeWidth={2.5} dot={{fill:"#A855F7",r:3}} activeDot={{r:5}} connectNulls={true}/>
+                </LineChart>
+              </ResponsiveContainer>
+              <div style={{color:"#555",fontSize:10,paddingLeft:10,marginTop:6}}>Avg: {avg(hrvData.map(d=>({hrv:d.hrv})),'hrv')} ms over {hrvData.length} day{hrvData.length===1?"":"s"}</div>
+            </div>
+          )}
+
+          {/* Sleep Stages stacked area chart (from Google Health) */}
+          {stagesData.length>=1&&(
+            <div style={{background:T.card,padding:"16px 8px 8px",marginBottom:20}}>
+              <div style={{...H,fontSize:10,color:"#555",paddingLeft:10,marginBottom:8,letterSpacing:"0.1em"}}>SLEEP STAGES (min)</div>
+              <ResponsiveContainer width="100%" height={180}>
+                <AreaChart data={stagesData}>
+                  <XAxis dataKey="date" tick={{fill:"#555",fontSize:9}} axisLine={false} tickLine={false}/>
+                  <YAxis tick={{fill:"#555",fontSize:10}} axisLine={false} tickLine={false} width={28}/>
+                  <Tooltip {...TT}/>
+                  <Area type="monotone" dataKey="deep" stackId="1" stroke="#3B82F6" fill="#3B82F6" fillOpacity={0.7}/>
+                  <Area type="monotone" dataKey="rem" stackId="1" stroke="#A855F7" fill="#A855F7" fillOpacity={0.7}/>
+                  <Area type="monotone" dataKey="light" stackId="1" stroke="#7DF9FF" fill="#7DF9FF" fillOpacity={0.5}/>
+                  <Area type="monotone" dataKey="awake" stackId="1" stroke="#FF6B35" fill="#FF6B35" fillOpacity={0.6}/>
+                </AreaChart>
+              </ResponsiveContainer>
+              <div style={{display:"flex",gap:10,paddingLeft:10,marginTop:6,flexWrap:"wrap"}}>
+                <div style={{display:"flex",alignItems:"center",gap:5}}><div style={{width:10,height:10,background:"#3B82F6"}}/><span style={{color:"#555",fontSize:10}}>Deep</span></div>
+                <div style={{display:"flex",alignItems:"center",gap:5}}><div style={{width:10,height:10,background:"#A855F7"}}/><span style={{color:"#555",fontSize:10}}>REM</span></div>
+                <div style={{display:"flex",alignItems:"center",gap:5}}><div style={{width:10,height:10,background:"#7DF9FF"}}/><span style={{color:"#555",fontSize:10}}>Light</span></div>
+                <div style={{display:"flex",alignItems:"center",gap:5}}><div style={{width:10,height:10,background:"#FF6B35"}}/><span style={{color:"#555",fontSize:10}}>Awake</span></div>
               </div>
             </div>
           )}
@@ -4386,32 +4500,80 @@ export default function KataokaApp(){
   const saveBarberIncome=async v=>{setBarberIncome(v);await S.set("barber_income",v);};
   const saveBarberDays=async v=>{setBarberDays(v);await S.set("barber_days",v);};
   const saveMorningLogs=async v=>{setMorningLogs(v);await S.set("morning_logs",v);};
+  // Sync a single date's Fitbit data into that day's morning log. Returns true if any data was found.
+  const ghealthSyncDate=async(dateStr,currentLogs)=>{
+    const [sleep,rhr,hrv]=await Promise.all([
+      ghealthFetchSleep(dateStr),
+      ghealthFetchRestingHR(dateStr),
+      ghealthFetchHRV(dateStr),
+    ]);
+    if(!sleep&&!rhr&&!hrv)return{found:false,log:null};
+    const existing=currentLogs.find(l=>l.date===dateStr)||{date:dateStr};
+    const merged={
+      ...existing,
+      ...(sleep?{
+        sleep:sleep.sleep,bedtime:sleep.bedtime,wakeTime:sleep.wakeTime,
+        ...(sleep.sleepStages?{sleepStages:sleep.sleepStages}:{}),
+        ...(sleep.minutesAsleep!=null?{minutesAsleep:sleep.minutesAsleep}:{}),
+      }:{}),
+      ...(rhr?{restingHR:rhr}:{}),
+      ...(hrv?{hrv:hrv}:{}),
+    };
+    return{found:true,log:merged};
+  };
+
   const ghealthSyncToday=async()=>{
     setGhealthSyncing(true);setGhealthError(null);
     try{
       const dateStr=todayStr();
-      const [sleep,rhr,hrv]=await Promise.all([
-        ghealthFetchSleep(dateStr),
-        ghealthFetchRestingHR(dateStr),
-        ghealthFetchHRV(dateStr),
-      ]);
-      if(!sleep&&!rhr&&!hrv){
+      const{found,log}=await ghealthSyncDate(dateStr,morningLogs);
+      if(!found){
         setGhealthError("No data found for today yet — your Charge 6 may not have synced");
         setGhealthSyncing(false);
         return false;
       }
-      const existing=morningLogs.find(l=>l.date===dateStr)||{date:dateStr};
-      const merged={
-        ...existing,
-        ...(sleep?{sleep:sleep.sleep,bedtime:sleep.bedtime,wakeTime:sleep.wakeTime}:{}),
-        ...(rhr?{restingHR:rhr}:{}),
-        ...(hrv?{hrv:hrv}:{}),
-      };
-      await saveMorningLogs([...morningLogs.filter(l=>l.date!==dateStr),merged]);
+      await saveMorningLogs([...morningLogs.filter(l=>l.date!==dateStr),log]);
       setGhealthSyncing(false);
       return true;
     }catch(e){
       setGhealthError("Sync failed: "+e.message);
+      setGhealthSyncing(false);
+      return false;
+    }
+  };
+
+  // Sync the last 7 days at once — built for a Sunday catch-up, fills in any day
+  // you forgot to log manually using whatever Fitbit/Google Health has recorded.
+  const ghealthSyncWeek=async()=>{
+    setGhealthSyncing(true);setGhealthError(null);
+    try{
+      const today=new Date();
+      const dates=[];
+      for(let i=0;i<7;i++){
+        const d=new Date(today);
+        d.setDate(d.getDate()-i);
+        dates.push(d.toISOString().split("T")[0]);
+      }
+      let workingLogs=[...morningLogs];
+      let daysFound=0;
+      for(const dateStr of dates){
+        const{found,log}=await ghealthSyncDate(dateStr,workingLogs);
+        if(found){
+          workingLogs=[...workingLogs.filter(l=>l.date!==dateStr),log];
+          daysFound++;
+        }
+      }
+      if(daysFound===0){
+        setGhealthError("No data found for the past week — check your Charge 6 has synced recently");
+        setGhealthSyncing(false);
+        return false;
+      }
+      await saveMorningLogs(workingLogs);
+      setGhealthSyncing(false);
+      setGhealthError(null);
+      return daysFound;
+    }catch(e){
+      setGhealthError("Week sync failed: "+e.message);
       setGhealthSyncing(false);
       return false;
     }
@@ -4489,7 +4651,7 @@ export default function KataokaApp(){
     templates,saveTemplates,workoutLogs,saveLogs,prs,checkPR,commitWorkout,resetAllData,resetPRs,
     barberWeeks,saveBarberWeeks,barberIncome,saveBarberIncome,barberDays,saveBarberDays,
     morningLogs,saveMorningLogs,nightLogs,saveNightLogs,goals,saveGoals,comingSoon,saveComingSoon,userDOB,saveDOB,bw,saveBw,userName,saveUserName,quotes,saveQuotes,weeklyReviews,saveWeeklyReviews,soMeVideos,saveSoMeVideos,soMeFollowers,saveSoMeFollowers,habits,saveHabits,hrvLogs,saveHrvLogs,financeMonths,saveFinanceMonths,appNotes,saveAppNotes,apiKey,saveApiKey,
-    ghealthConnected,ghealthSyncing,ghealthError,ghealthSyncToday,ghealthDoConnect,ghealthDoDisconnect};
+    ghealthConnected,ghealthSyncing,ghealthError,ghealthSyncToday,ghealthSyncWeek,ghealthDoConnect,ghealthDoDisconnect};
 
   const SCREENS={home:HomeScreen,workout:WorkoutHome,"workout-log":LogChoose,"workout-edit-templates":EditTemplates,"workout-ranks":RankExplainerScreen,"workout-templates":TemplatePick,"workout-active":ActiveWorkout,"workout-history":WorkoutHistory,"workout-session":WorkoutSession,"workout-progress":ProgressTracker,"workout-create":CreateTemplate,"workout-exercise":ExerciseProgress,barber:BarberScreen,daily:DailyScreen,health:HealthScreen,goals:GoalsScreen,me:MeScreen,quotes:QuoteVaultScreen,some:SoMeScreen,financials:FinancialsScreen,physique:PhysiqueScreen};
   const Screen=SCREENS[screen]||HomeScreen;
