@@ -433,8 +433,7 @@ const ghealthFetchRestingHRRange=async(startDateStr,endDateStr)=>{
   const url=`https://health.googleapis.com/v4/users/me/dataTypes/daily-resting-heart-rate/dataPoints:reconcile?filter=dailyRestingHeartRate.date >= "${startDateStr}" AND dailyRestingHeartRate.date < "${endNextStr}"&pageSize=20`;
   const res=await fetch(url,{headers:{Authorization:`Bearer ${token}`}});
   const raw=await res.json();
-  // Store raw response for debug
-  window._ghealthRHRDebug=JSON.stringify(raw).slice(0,500);
+  window._ghealthRHRDebug=`status:${res.status} body:${JSON.stringify(raw).slice(0,400)}`;
   if(!res.ok)return{};
   const out={};
   for(const point of(raw?.dataPoints||[])){
@@ -463,7 +462,7 @@ const ghealthFetchHRVRange=async(startDateStr,endDateStr)=>{
   const url=`https://health.googleapis.com/v4/users/me/dataTypes/daily-heart-rate-variability/dataPoints:reconcile?filter=dailyHeartRateVariability.date >= "${startDateStr}" AND dailyHeartRateVariability.date < "${endNextStr}"&pageSize=20`;
   const res=await fetch(url,{headers:{Authorization:`Bearer ${token}`}});
   const raw=await res.json();
-  window._ghealthHRVDebug=JSON.stringify(raw).slice(0,500);
+  window._ghealthHRVDebug=`status:${res.status} body:${JSON.stringify(raw).slice(0,400)}`;
   if(!res.ok)return{};
   const out={};
   for(const point of(raw?.dataPoints||[])){
