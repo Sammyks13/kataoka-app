@@ -375,12 +375,15 @@ const ghealthDisconnect=async()=>{await S.set("ghealth_tokens",null);};
 
 // Fetch sleep data for a given date (YYYY-MM-DD), returns hours slept + bed/wake times, or null
 // Fetch sleep data across a date range [startDateStr, endDateStr] inclusive.
-// Returns a map of dateStr -> {sleep, bedtime, wakeTime}, keyed by the date the sleep *ended* on
-// (i.e. the morning you woke up), which is what morning logs are keyed by.
+// Returns a map of dateStr -> {sleep, bedtime, wakeTime, sleepStages?, minutesAsleep?}
+// keyed by the date the sleep *ended* on (wake-up date = morning log date).
 const ghealthFetchSleepRange=async(startDateStr,endDateStr)=>{
   const token=await ghealthGetValidToken();
   if(!token)return{};
-  const url=`https://health.googleapis.com/v4/users/me/dataTypes/sleep/dataPoints?filter=sleep.interval.civil_end_time >= "${startDateStr}" AND sleep.interval.civil_end_time <= "${endDateStr}T23:59:59"&pageSize=20`;
+  // Bump end date by 1 day for exclusive upper bound, use civil_end_time
+  const endNext=new Date(endDateStr+'T12:00:00');endNext.setDate(endNext.getDate()+1);
+  const endNextStr=endNext.toISOString().split('T')[0];
+  const url=`https://health.googleapis.com/v4/users/me/dataTypes/sleep/dataPoints?filter=sleep.interval.civil_end_time >= "${startDateStr}" AND sleep.interval.civil_end_time < "${endNextStr}"&pageSize=25`;
   const res=await fetch(url,{headers:{Authorization:`Bearer ${token}`}});
   if(!res.ok)return{};
   const data=await res.json();
@@ -389,9 +392,8 @@ const ghealthFetchSleepRange=async(startDateStr,endDateStr)=>{
     if(!point?.sleep)continue;
     const start=new Date(point.sleep.interval.startTime);
     const end=new Date(point.sleep.interval.endTime);
-    const dayKey=end.toISOString().split("T")[0]; // keyed by wake-up date
+    const dayKey=end.toISOString().split("T")[0];
     const hours=Math.round(((end-start)/3600000)*10)/10;
-    // Extract sleep stage breakdown if present (point.sleep.summary.stagesSummary)
     const stagesArr=point.sleep.summary?.stagesSummary||[];
     const stages={deep:0,rem:0,light:0,awake:0};
     stagesArr.forEach(s=>{
@@ -404,7 +406,6 @@ const ghealthFetchSleepRange=async(startDateStr,endDateStr)=>{
     });
     const hasStages=stagesArr.length>0;
     const minutesAsleep=point.sleep.summary?.minutesAsleep?parseInt(point.sleep.summary.minutesAsleep):null;
-    // If multiple sleep sessions land on the same day, keep the longest one
     if(!out[dayKey]||hours>out[dayKey].sleep){
       out[dayKey]={
         sleep:hours,
@@ -423,10 +424,14 @@ const ghealthFetchSleep=async(dateStr)=>{
 };
 
 // Fetch resting heart rate across a date range. Returns map of dateStr -> value.
+// Correct URL: daily-resting-heart-rate (kebab-case)
+// Correct filter field: dailyRestingHeartRate.date (camelCase per docs)
 const ghealthFetchRestingHRRange=async(startDateStr,endDateStr)=>{
   const token=await ghealthGetValidToken();
   if(!token)return{};
-  const url=`https://health.googleapis.com/v4/users/me/dataTypes/dailyRestingHeartRate/dataPoints?filter=dailyRestingHeartRate.date >= "${startDateStr}" AND dailyRestingHeartRate.date <= "${endDateStr}"&pageSize=20`;
+  const endNext=new Date(endDateStr+'T12:00:00');endNext.setDate(endNext.getDate()+1);
+  const endNextStr=endNext.toISOString().split('T')[0];
+  const url=`https://health.googleapis.com/v4/users/me/dataTypes/daily-resting-heart-rate/dataPoints?filter=dailyRestingHeartRate.date >= "${startDateStr}" AND dailyRestingHeartRate.date < "${endNextStr}"&pageSize=20`;
   const res=await fetch(url,{headers:{Authorization:`Bearer ${token}`}});
   if(!res.ok)return{};
   const data=await res.json();
@@ -443,10 +448,14 @@ const ghealthFetchRestingHR=async(dateStr)=>{
 };
 
 // Fetch HRV across a date range. Returns map of dateStr -> value.
+// Correct URL: daily-heart-rate-variability (kebab-case)
+// Correct filter field: dailyHeartRateVariability.date (camelCase per docs)
 const ghealthFetchHRVRange=async(startDateStr,endDateStr)=>{
   const token=await ghealthGetValidToken();
   if(!token)return{};
-  const url=`https://health.googleapis.com/v4/users/me/dataTypes/dailyHeartRateVariability/dataPoints?filter=dailyHeartRateVariability.date >= "${startDateStr}" AND dailyHeartRateVariability.date <= "${endDateStr}"&pageSize=20`;
+  const endNext=new Date(endDateStr+'T12:00:00');endNext.setDate(endNext.getDate()+1);
+  const endNextStr=endNext.toISOString().split('T')[0];
+  const url=`https://health.googleapis.com/v4/users/me/dataTypes/daily-heart-rate-variability/dataPoints?filter=dailyHeartRateVariability.date >= "${startDateStr}" AND dailyHeartRateVariability.date < "${endNextStr}"&pageSize=20`;
   const res=await fetch(url,{headers:{Authorization:`Bearer ${token}`}});
   if(!res.ok)return{};
   const data=await res.json();
