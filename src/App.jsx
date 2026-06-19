@@ -3570,12 +3570,17 @@ function PhysiqueScreen(){
   const [phase,setPhase]=useState(()=>{try{const v=localStorage.getItem('k3_phase');return v?JSON.parse(v):{type:'bulk',start:todayStr(),target:75,startWeight:65};}catch{return{type:'bulk',start:todayStr(),target:75,startWeight:65};}});
   const [weighIns,setWeighIns]=useState(()=>{try{const v=localStorage.getItem('k3_weighins');return v?JSON.parse(v):[];}catch{return [];}});
   const [newWeight,setNewWeight]=useState("");
-  const [pendingImg,setPendingImg]=useState(null);
+  const [pendingFront,setPendingFront]=useState(null);
+  const [pendingBack,setPendingBack]=useState(null);
+  const [pendingNote,setPendingNote]=useState("");
   const [aiAnalysis,setAiAnalysis]=useState(null);
   const [aiLoading,setAiLoading]=useState(false);
   const [editPhase,setEditPhase]=useState(false);
   const [targetInput,setTargetInput]=useState(String(phase.target));
   const [startInput,setStartInput]=useState(String(phase.startWeight));
+  const [editingEntry,setEditingEntry]=useState(null); // date string of entry being edited
+  const [editBuf,setEditBuf]=useState({});
+  const [expandedEntry,setExpandedEntry]=useState(null); // date string of expanded grid item
   const H={fontFamily:"'Barlow Condensed',sans-serif",fontWeight:900,textTransform:"uppercase"};
 
   const savePhase=v=>{setPhase(v);localStorage.setItem('k3_phase',JSON.stringify(v));};
@@ -3597,11 +3602,26 @@ function PhysiqueScreen(){
     reader.readAsDataURL(file);
   });
 
+  const imgInput=(label,value,setter)=>(
+    <label style={{cursor:"pointer",border:`1px solid ${value?"#39FF14":"#222"}`,padding:"6px 10px",display:"flex",alignItems:"center",gap:6,...H,fontSize:10,color:value?"#39FF14":T.sub,letterSpacing:"0.04em",flex:1}}>
+      📷 {value?label+" ✓":label}
+      <input type="file" accept="image/*" capture="environment" style={{display:"none"}} onChange={async e=>{
+        if(e.target.files[0]){const b64=await compressImage(e.target.files[0]);setter(b64);}
+      }}/>
+    </label>
+  );
+
   const logWeight=async()=>{
     if(!newWeight)return;
-    const entry={date:todayStr(),weight:parseFloat(newWeight),img:pendingImg||null};
+    const entry={date:todayStr(),weight:parseFloat(newWeight),front:pendingFront||null,back:pendingBack||null,note:pendingNote||null};
     const updated=[...weighIns.filter(w=>w.date!==todayStr()),entry].sort((a,b)=>a.date.localeCompare(b.date));
-    saveWeighIns(updated);setNewWeight("");setPendingImg(null);
+    saveWeighIns(updated);setNewWeight("");setPendingFront(null);setPendingBack(null);setPendingNote("");
+  };
+
+  const startEdit=(w)=>{setEditingEntry(w.date);setEditBuf({weight:String(w.weight),note:w.note||"",front:w.front||null,back:w.back||null});};
+  const saveEdit=()=>{
+    const updated=weighIns.map(w=>w.date===editingEntry?{...w,weight:parseFloat(editBuf.weight)||w.weight,note:editBuf.note||null,front:editBuf.front,back:editBuf.back}:w);
+    saveWeighIns(updated);setEditingEntry(null);setEditBuf({});
   };
 
   const latestWeight=weighIns.length?weighIns[weighIns.length-1].weight:phase.startWeight;
@@ -3639,7 +3659,7 @@ function PhysiqueScreen(){
 
       {/* Tab bar */}
       <div style={{display:"flex",borderBottom:`1px solid ${T.div}`,marginBottom:20}}>
-        {[["log","LOG"],["analysis","ANALYSIS"]].map(([id,l])=>(
+        {[["log","LOG"],["history","HISTORY"],["analysis","ANALYSIS"]].map(([id,l])=>(
           <button key={id} onClick={()=>setPhysTab(id)} style={{flex:1,background:"transparent",border:"none",
             borderBottom:`2px solid ${physTab===id?T.text:"transparent"}`,color:physTab===id?T.text:T.sub,
             padding:"10px 0",marginBottom:-1,...H,fontSize:11,cursor:"pointer",letterSpacing:"0.06em"}}>{l}</button>
@@ -3700,79 +3720,173 @@ function PhysiqueScreen(){
           )}
         </div>
 
+        {/* Position reminder */}
+        <div style={{borderLeft:"2px solid #333",paddingLeft:10,marginBottom:20}}>
+          <div style={{fontFamily:"'Barlow Condensed',sans-serif",fontWeight:700,fontSize:11,color:"#444",letterSpacing:"0.08em",lineHeight:1.5}}>
+            HEEL / TOES AT EDGE OF BATH · PHONE IN SKINCARE BOX · TAKE PHOTO POST MORNING TOILET
+          </div>
+        </div>
+
         {/* Daily weigh-in */}
         <div style={{marginBottom:24}}>
           <div style={{...H,fontSize:10,color:T.sub,letterSpacing:"0.12em",marginBottom:10}}>MORNING WEIGH-IN</div>
-          <div style={{display:"flex",gap:8,marginBottom:8}}>
+          <div style={{display:"flex",gap:8,marginBottom:12}}>
             <input value={newWeight} onChange={e=>setNewWeight(e.target.value)} placeholder="kg" type="number" step="0.1"
               style={{flex:1,background:T.inp,border:"none",borderBottom:"1px solid #333",borderRadius:0,padding:"12px 8px",color:T.text,...H,fontSize:18,outline:"none"}}/>
             <button onClick={logWeight} style={{padding:"0 20px",background:T.text,color:T.bg,border:"none",borderRadius:0,...H,fontSize:12,cursor:"pointer"}}>LOG</button>
           </div>
-          <div style={{display:"flex",alignItems:"center",gap:10}}>
-            <label style={{cursor:"pointer",border:"1px solid #222",padding:"6px 12px",...H,fontSize:10,color:T.sub,letterSpacing:"0.06em"}}>
-              {pendingImg?"📷 PHOTO ATTACHED":"📷 ATTACH PHOTO"}
-              <input type="file" accept="image/*" style={{display:"none"}} onChange={async e=>{
-                if(e.target.files[0]){const b64=await compressImage(e.target.files[0]);setPendingImg(b64);}
-              }}/>
-            </label>
-            {pendingImg&&(
-              <>
-                <img src={pendingImg} style={{width:40,height:40,objectFit:"cover",border:"1px solid #333"}}/>
-                <button onClick={()=>setPendingImg(null)} style={{background:"none",border:"none",color:"#444",cursor:"pointer",fontSize:14}}>×</button>
-              </>
-            )}
+          <div style={{display:"flex",gap:8,marginBottom:10}}>
+            {imgInput("FRONT",pendingFront,setPendingFront)}
+            {imgInput("BACK",pendingBack,setPendingBack)}
           </div>
+          {(pendingFront||pendingBack)&&(
+            <div style={{display:"flex",gap:8,marginBottom:10}}>
+              {pendingFront&&(
+                <div style={{flex:1,position:"relative"}}>
+                  <img src={pendingFront} style={{width:"100%",aspectRatio:"3/4",objectFit:"cover",display:"block"}}/>
+                  <button onClick={()=>setPendingFront(null)} style={{position:"absolute",top:4,right:4,background:"rgba(0,0,0,0.7)",border:"none",color:"#fff",cursor:"pointer",fontSize:16,width:24,height:24,borderRadius:"50%"}}>×</button>
+                  <div style={{...H,fontSize:9,color:T.sub,marginTop:4,textAlign:"center"}}>FRONT</div>
+                </div>
+              )}
+              {pendingBack&&(
+                <div style={{flex:1,position:"relative"}}>
+                  <img src={pendingBack} style={{width:"100%",aspectRatio:"3/4",objectFit:"cover",display:"block"}}/>
+                  <button onClick={()=>setPendingBack(null)} style={{position:"absolute",top:4,right:4,background:"rgba(0,0,0,0.7)",border:"none",color:"#fff",cursor:"pointer",fontSize:16,width:24,height:24,borderRadius:"50%"}}>×</button>
+                  <div style={{...H,fontSize:9,color:T.sub,marginTop:4,textAlign:"center"}}>BACK</div>
+                </div>
+              )}
+            </div>
+          )}
+          <textarea value={pendingNote} onChange={e=>setPendingNote(e.target.value)} placeholder="Notes (optional)..."
+            style={{width:"100%",background:T.inp,border:"none",borderBottom:"1px solid #333",borderRadius:0,padding:"10px 8px",color:T.text,fontFamily:"'Barlow',sans-serif",fontSize:13,outline:"none",minHeight:70,resize:"vertical",lineHeight:1.5}}/>
         </div>
 
-        {/* Recent entries — weight only, no photos */}
+        {/* Recent entries — editable */}
         {weighIns.length>0&&(
           <div>
             <div style={{...H,fontSize:10,color:T.sub,letterSpacing:"0.12em",marginBottom:10}}>RECENT</div>
             {[...weighIns].reverse().slice(0,5).map(w=>(
-              <div key={w.date} style={{display:"flex",justifyContent:"space-between",alignItems:"center",paddingBottom:8,marginBottom:8,borderBottom:`1px solid ${T.div}`}}>
-                <div style={{color:T.sub,fontSize:12}}>{w.date}</div>
-                <div style={{display:"flex",gap:12,alignItems:"center"}}>
-                  {w.img&&<span style={{fontSize:10}}>📷</span>}
-                  <div style={{...H,fontSize:16}}>{w.weight}kg</div>
-                  <button onClick={()=>saveWeighIns(weighIns.filter(x=>x.date!==w.date))} style={{background:"none",border:"none",color:"#333",cursor:"pointer",fontSize:14}}>×</button>
-                </div>
+              <div key={w.date}>
+                {editingEntry===w.date?(
+                  <div style={{background:T.card,padding:14,marginBottom:12}}>
+                    <div style={{...H,fontSize:12,marginBottom:10}}>{w.date}</div>
+                    <div style={{display:"flex",gap:8,marginBottom:10,alignItems:"center"}}>
+                      <input value={editBuf.weight} onChange={e=>setEditBuf(b=>({...b,weight:e.target.value}))} type="number" step="0.1"
+                        style={{flex:1,background:T.inp,border:"none",borderBottom:"1px solid #333",padding:"8px 4px",color:T.text,...H,fontSize:16,outline:"none"}}/>
+                      <span style={{color:T.sub,fontSize:12,...H}}>KG</span>
+                    </div>
+                    <div style={{display:"flex",gap:8,marginBottom:10}}>
+                      <label style={{cursor:"pointer",border:`1px solid ${editBuf.front?"#39FF14":"#222"}`,padding:"6px 10px",...H,fontSize:10,color:editBuf.front?"#39FF14":T.sub,flex:1}}>
+                        📷 {editBuf.front?"FRONT ✓":"FRONT"}
+                        <input type="file" accept="image/*" capture="environment" style={{display:"none"}} onChange={async e=>{
+                          if(e.target.files[0]){const b64=await compressImage(e.target.files[0]);setEditBuf(b=>({...b,front:b64}));}
+                        }}/>
+                      </label>
+                      <label style={{cursor:"pointer",border:`1px solid ${editBuf.back?"#39FF14":"#222"}`,padding:"6px 10px",...H,fontSize:10,color:editBuf.back?"#39FF14":T.sub,flex:1}}>
+                        📷 {editBuf.back?"BACK ✓":"BACK"}
+                        <input type="file" accept="image/*" capture="environment" style={{display:"none"}} onChange={async e=>{
+                          if(e.target.files[0]){const b64=await compressImage(e.target.files[0]);setEditBuf(b=>({...b,back:b64}));}
+                        }}/>
+                      </label>
+                    </div>
+                    <textarea value={editBuf.note} onChange={e=>setEditBuf(b=>({...b,note:e.target.value}))} placeholder="Notes..."
+                      style={{width:"100%",background:T.inp,border:"none",borderBottom:"1px solid #333",padding:"8px",color:T.text,fontFamily:"'Barlow',sans-serif",fontSize:13,outline:"none",minHeight:60,resize:"vertical",marginBottom:10,lineHeight:1.5}}/>
+                    <div style={{display:"flex",gap:8}}>
+                      <button onClick={saveEdit} style={{flex:1,padding:"8px",background:T.text,color:T.bg,border:"none",...H,fontSize:11,cursor:"pointer"}}>SAVE</button>
+                      <button onClick={()=>{setEditingEntry(null);setEditBuf({});}} style={{flex:1,padding:"8px",background:"transparent",color:T.sub,border:`1px solid ${T.div}`,...H,fontSize:11,cursor:"pointer"}}>CANCEL</button>
+                    </div>
+                  </div>
+                ):(
+                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",paddingBottom:8,marginBottom:8,borderBottom:`1px solid ${T.div}`}}>
+                    <div>
+                      <div style={{color:T.sub,fontSize:12}}>{w.date}</div>
+                      {w.note&&<div style={{color:"#444",fontSize:11,marginTop:2,fontStyle:"italic"}}>{w.note}</div>}
+                    </div>
+                    <div style={{display:"flex",gap:10,alignItems:"center"}}>
+                      {(w.front||w.back)&&<span style={{fontSize:10,color:"#444"}}>📷 {[w.front?"F":null,w.back?"B":null].filter(Boolean).join("+")}</span>}
+                      <div style={{...H,fontSize:16}}>{w.weight}kg</div>
+                      <button onClick={()=>startEdit(w)} style={{background:"none",border:"none",color:T.sub,cursor:"pointer",...H,fontSize:10,letterSpacing:"0.04em"}}>EDIT</button>
+                      <button onClick={()=>saveWeighIns(weighIns.filter(x=>x.date!==w.date))} style={{background:"none",border:"none",color:"#333",cursor:"pointer",fontSize:14}}>×</button>
+                    </div>
+                  </div>
+                )}
               </div>
             ))}
           </div>
         )}
       </>)}
 
-      {physTab==="log"&&(
-        <Btn label="Photo History" onClick={()=>setPhysTab("history")} ghost style={{marginBottom:10,padding:"18px"}}/>
-      )}
-
       {/* ── HISTORY TAB ── */}
       {physTab==="history"&&(<>
-        <button onClick={()=>setPhysTab("log")} style={{background:"none",border:"none",color:T.sub,cursor:"pointer",fontSize:22,padding:"0 0 16px 0",lineHeight:1}}>←</button>
-        {weighIns.filter(w=>w.img).length===0&&(
-          <div style={{color:T.sub,fontSize:12,paddingTop:20,textAlign:"center"}}>No progress photos logged yet.</div>
+        {weighIns.length===0&&(
+          <div style={{color:T.sub,fontSize:12,paddingTop:20,textAlign:"center"}}>No weigh-ins logged yet.</div>
         )}
-        {[...weighIns].reverse().filter(w=>w.img).map(w=>{
-          const ctx=getCtx(w.date);
-          return(
-            <div key={w.date} style={{paddingBottom:20,marginBottom:20,borderBottom:`1px solid ${T.div}`}}>
-              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:6}}>
-                <div style={{...H,fontSize:14}}>{w.date}</div>
-                <div style={{...H,fontSize:18}}>{w.weight}kg</div>
+
+        {/* 3-column grid */}
+        <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:6}}>
+          {[...weighIns].reverse().map(w=>{
+            const isExpanded=expandedEntry===w.date;
+            return(
+              <div key={w.date} style={{gridColumn:isExpanded?"span 3":"span 1"}}>
+                {isExpanded?(
+                  // Expanded view
+                  <div style={{background:T.card,padding:12,marginBottom:6}}>
+                    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
+                      <div style={{...H,fontSize:13}}>{w.date}</div>
+                      <div style={{display:"flex",gap:8,alignItems:"center"}}>
+                        <div style={{...H,fontSize:18}}>{w.weight}kg</div>
+                        <button onClick={()=>setExpandedEntry(null)} style={{background:"none",border:"none",color:T.sub,cursor:"pointer",fontSize:18,lineHeight:1}}>×</button>
+                      </div>
+                    </div>
+                    {(w.front||w.back)&&(
+                      <div style={{display:"flex",gap:8,marginBottom:8}}>
+                        {w.front&&(
+                          <div style={{flex:1}}>
+                            <img src={w.front} style={{width:"100%",display:"block"}}/>
+                            <div style={{...H,fontSize:9,color:T.sub,marginTop:4,textAlign:"center"}}>FRONT</div>
+                          </div>
+                        )}
+                        {w.back&&(
+                          <div style={{flex:1}}>
+                            <img src={w.back} style={{width:"100%",display:"block"}}/>
+                            <div style={{...H,fontSize:9,color:T.sub,marginTop:4,textAlign:"center"}}>BACK</div>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                    {w.note&&<div style={{color:T.sub,fontSize:12,fontStyle:"italic",marginBottom:8}}>{w.note}</div>}
+                    {(()=>{const ctx=getCtx(w.date);return ctx.sleep||ctx.energy||ctx.mood?(
+                      <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+                        {ctx.sleep&&<span style={{color:"#444",fontSize:11}}>😴 {ctx.sleep}h</span>}
+                        {ctx.energy&&<span style={{color:"#444",fontSize:11}}>⚡ {ctx.energy}/10</span>}
+                        {ctx.mood&&<span style={{color:"#444",fontSize:11}}>🎯 {ctx.mood}/10</span>}
+                      </div>
+                    ):null;})()}
+                    <div style={{display:"flex",gap:8,marginTop:10}}>
+                      <button onClick={()=>{setPhysTab("log");startEdit(w);setExpandedEntry(null);}} style={{flex:1,padding:"8px",background:"transparent",color:T.sub,border:`1px solid ${T.div}`,...H,fontSize:10,cursor:"pointer"}}>EDIT</button>
+                      <button onClick={()=>{saveWeighIns(weighIns.filter(x=>x.date!==w.date));setExpandedEntry(null);}} style={{flex:1,padding:"8px",background:"transparent",color:"#FF3B5C",border:`1px solid #FF3B5C`,...H,fontSize:10,cursor:"pointer"}}>DELETE</button>
+                    </div>
+                  </div>
+                ):(
+                  // Grid cell — tap to expand
+                  <div onClick={()=>setExpandedEntry(w.date)} style={{cursor:"pointer",background:T.card}}>
+                    {(w.front||w.back)?(
+                      <img src={w.front||w.back} style={{width:"100%",aspectRatio:"3/4",objectFit:"cover",display:"block"}}/>
+                    ):(
+                      <div style={{width:"100%",aspectRatio:"3/4",background:T.div,display:"flex",alignItems:"center",justifyContent:"center"}}>
+                        <span style={{...H,fontSize:14}}>{w.weight}kg</span>
+                      </div>
+                    )}
+                    <div style={{padding:"4px 6px"}}>
+                      <div style={{...H,fontSize:11}}>{w.weight}kg</div>
+                      <div style={{color:T.sub,fontSize:9}}>{w.date.slice(5)}</div>
+                    </div>
+                  </div>
+                )}
               </div>
-              {(ctx.sleep||ctx.energy||ctx.mood)&&(
-                <div style={{display:"flex",gap:10,marginBottom:8,flexWrap:"wrap"}}>
-                  {ctx.sleep&&<span style={{color:T.sub,fontSize:11}}>😴 {ctx.sleep}h sleep</span>}
-                  {ctx.energy&&<span style={{color:T.sub,fontSize:11}}>⚡ energy {ctx.energy}/10</span>}
-                  {ctx.mood&&<span style={{color:T.sub,fontSize:11}}>🎯 mood {ctx.mood}/10</span>}
-                  {ctx.prevMood&&<span style={{color:"#444",fontSize:11}}>prev night mood {ctx.prevMood}/10</span>}
-                  {ctx.prevEnergy&&<span style={{color:"#444",fontSize:11}}>energy {ctx.prevEnergy}/10</span>}
-                </div>
-              )}
-              <img src={w.img} style={{width:"100%",borderRadius:0,display:"block"}}/>
-            </div>
-          );
-        })}
+            );
+          })}
+        </div>
       </>)}
 
       {/* ── ANALYSIS TAB ── */}
