@@ -424,60 +424,62 @@ const ghealthFetchSleep=async(dateStr)=>{
 };
 
 // Fetch resting heart rate across a date range. Returns map of dateStr -> value.
-// Correct URL: daily-resting-heart-rate (kebab-case)
-// Correct filter field: dailyRestingHeartRate.date (camelCase per docs)
 const ghealthFetchRestingHRRange=async(startDateStr,endDateStr)=>{
   const token=await ghealthGetValidToken();
   if(!token)return{};
   const endNext=new Date(endDateStr+'T12:00:00');endNext.setDate(endNext.getDate()+1);
   const endNextStr=endNext.toISOString().split('T')[0];
-  const url=`https://health.googleapis.com/v4/users/me/dataTypes/daily-resting-heart-rate/dataPoints?filter=dailyRestingHeartRate.date >= "${startDateStr}" AND dailyRestingHeartRate.date < "${endNextStr}"&pageSize=20`;
+  // Use reconcile endpoint to merge all Fitbit data sources
+  const url=`https://health.googleapis.com/v4/users/me/dataTypes/daily-resting-heart-rate/dataPoints:reconcile?filter=dailyRestingHeartRate.date >= "${startDateStr}" AND dailyRestingHeartRate.date < "${endNextStr}"&pageSize=20`;
   const res=await fetch(url,{headers:{Authorization:`Bearer ${token}`}});
+  const raw=await res.json();
+  // Store raw response for debug
+  window._ghealthRHRDebug=JSON.stringify(raw).slice(0,500);
   if(!res.ok)return{};
-  const data=await res.json();
   const out={};
-  for(const point of(data?.dataPoints||[])){
+  for(const point of(raw?.dataPoints||[])){
+    // Try both camelCase and nested date formats
     const d=point?.dailyRestingHeartRate;
     if(!d)continue;
-    // date field is {year, month, day} object in the API response
-    const dateObj=d.date;
-    if(!dateObj||d.value==null)continue;
-    const dateStr=`${dateObj.year}-${String(dateObj.month).padStart(2,'0')}-${String(dateObj.day).padStart(2,'0')}`;
+    let dateStr;
+    if(typeof d.date==='string'){dateStr=d.date;}
+    else if(d.date?.year){dateStr=`${d.date.year}-${String(d.date.month).padStart(2,'0')}-${String(d.date.day).padStart(2,'0')}`;}
+    if(!dateStr||d.value==null)continue;
     out[dateStr]=parseFloat(d.value)||d.value;
   }
   return out;
 };
 const ghealthFetchRestingHR=async(dateStr)=>{
   const range=await ghealthFetchRestingHRRange(dateStr,dateStr);
-  return range[dateStr]||null;
+  return range[dateStr]??null;
 };
 
 // Fetch HRV across a date range. Returns map of dateStr -> value.
-// Correct URL: daily-heart-rate-variability (kebab-case)
-// Correct filter field: dailyHeartRateVariability.date (camelCase per docs)
 const ghealthFetchHRVRange=async(startDateStr,endDateStr)=>{
   const token=await ghealthGetValidToken();
   if(!token)return{};
   const endNext=new Date(endDateStr+'T12:00:00');endNext.setDate(endNext.getDate()+1);
   const endNextStr=endNext.toISOString().split('T')[0];
-  const url=`https://health.googleapis.com/v4/users/me/dataTypes/daily-heart-rate-variability/dataPoints?filter=dailyHeartRateVariability.date >= "${startDateStr}" AND dailyHeartRateVariability.date < "${endNextStr}"&pageSize=20`;
+  const url=`https://health.googleapis.com/v4/users/me/dataTypes/daily-heart-rate-variability/dataPoints:reconcile?filter=dailyHeartRateVariability.date >= "${startDateStr}" AND dailyHeartRateVariability.date < "${endNextStr}"&pageSize=20`;
   const res=await fetch(url,{headers:{Authorization:`Bearer ${token}`}});
+  const raw=await res.json();
+  window._ghealthHRVDebug=JSON.stringify(raw).slice(0,500);
   if(!res.ok)return{};
-  const data=await res.json();
   const out={};
-  for(const point of(data?.dataPoints||[])){
+  for(const point of(raw?.dataPoints||[])){
     const d=point?.dailyHeartRateVariability;
     if(!d)continue;
-    const dateObj=d.date;
-    if(!dateObj||d.value==null)continue;
-    const dateStr=`${dateObj.year}-${String(dateObj.month).padStart(2,'0')}-${String(dateObj.day).padStart(2,'0')}`;
+    let dateStr;
+    if(typeof d.date==='string'){dateStr=d.date;}
+    else if(d.date?.year){dateStr=`${d.date.year}-${String(d.date.month).padStart(2,'0')}-${String(d.date.day).padStart(2,'0')}`;}
+    if(!dateStr||d.value==null)continue;
     out[dateStr]=parseFloat(d.value)||d.value;
   }
   return out;
 };
 const ghealthFetchHRV=async(dateStr)=>{
   const range=await ghealthFetchHRVRange(dateStr,dateStr);
-  return range[dateStr]||null;
+  return range[dateStr]??null;
 };
 
 // ─── Ranks ────────────────────────────────────────────────────────────────────
@@ -4659,7 +4661,7 @@ export default function KataokaApp(){
       ghealthFetchRestingHR(dateStr),
       ghealthFetchHRV(dateStr),
     ]);
-    setGhealthDebug({date:dateStr,sleep:sleep?{hours:sleep.sleep,bedtime:sleep.bedtime}:"null",rhr:rhr??null,hrv:hrv??null});
+    setGhealthDebug({date:dateStr,sleep:sleep?{hours:sleep.sleep,bedtime:sleep.bedtime}:"null",rhr:rhr??null,hrv:hrv??null,rhrRaw:window._ghealthRHRDebug||"not called",hrvRaw:window._ghealthHRVDebug||"not called"});
     if(!sleep&&rhr==null&&hrv==null)return{found:false,log:null};
     const existing=currentLogs.find(l=>l.date===dateStr)||{date:dateStr};
     const merged={
