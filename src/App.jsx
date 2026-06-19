@@ -430,7 +430,7 @@ const ghealthFetchRestingHRRange=async(startDateStr,endDateStr)=>{
   const endNext=new Date(endDateStr+'T12:00:00');endNext.setDate(endNext.getDate()+1);
   const endNextStr=endNext.toISOString().split('T')[0];
   // Use reconcile endpoint to merge all Fitbit data sources
-  const url=`https://health.googleapis.com/v4/users/me/dataTypes/daily-resting-heart-rate/dataPoints:reconcile?filter=dailyRestingHeartRate.date >= "${startDateStr}" AND dailyRestingHeartRate.date < "${endNextStr}"&pageSize=20`;
+  const url=`https://health.googleapis.com/v4/users/me/dataTypes/daily-resting-heart-rate/dataPoints?filter=daily_resting_heart_rate.date >= "${startDateStr}" AND daily_resting_heart_rate.date < "${endNextStr}"&pageSize=20`;
   const res=await fetch(url,{headers:{Authorization:`Bearer ${token}`}});
   const raw=await res.json();
   window._ghealthRHRDebug=`status:${res.status} body:${JSON.stringify(raw).slice(0,400)}`;
@@ -459,7 +459,7 @@ const ghealthFetchHRVRange=async(startDateStr,endDateStr)=>{
   if(!token)return{};
   const endNext=new Date(endDateStr+'T12:00:00');endNext.setDate(endNext.getDate()+1);
   const endNextStr=endNext.toISOString().split('T')[0];
-  const url=`https://health.googleapis.com/v4/users/me/dataTypes/daily-heart-rate-variability/dataPoints:reconcile?filter=dailyHeartRateVariability.date >= "${startDateStr}" AND dailyHeartRateVariability.date < "${endNextStr}"&pageSize=20`;
+  const url=`https://health.googleapis.com/v4/users/me/dataTypes/daily-heart-rate-variability/dataPoints?filter=daily_heart_rate_variability.date >= "${startDateStr}" AND daily_heart_rate_variability.date < "${endNextStr}"&pageSize=20`;
   const res=await fetch(url,{headers:{Authorization:`Bearer ${token}`}});
   const raw=await res.json();
   window._ghealthHRVDebug=`status:${res.status} body:${JSON.stringify(raw).slice(0,400)}`;
