@@ -392,7 +392,7 @@ const ghealthFetchSleepRange=async(startDateStr,endDateStr)=>{
     if(!point?.sleep)continue;
     const start=new Date(point.sleep.interval.startTime);
     const end=new Date(point.sleep.interval.endTime);
-    const dayKey=end.toISOString().split("T")[0];
+    const dayKey=end.toLocaleDateString('sv-SE'); // sv-SE gives YYYY-MM-DD in local time
     const hours=Math.round(((end-start)/3600000)*10)/10;
     const stagesArr=point.sleep.summary?.stagesSummary||[];
     const stages={deep:0,rem:0,light:0,awake:0};
@@ -438,7 +438,12 @@ const ghealthFetchRestingHRRange=async(startDateStr,endDateStr)=>{
   const out={};
   for(const point of(data?.dataPoints||[])){
     const d=point?.dailyRestingHeartRate;
-    if(d?.date&&d?.value!=null)out[d.date]=d.value;
+    if(!d)continue;
+    // date field is {year, month, day} object in the API response
+    const dateObj=d.date;
+    if(!dateObj||d.value==null)continue;
+    const dateStr=`${dateObj.year}-${String(dateObj.month).padStart(2,'0')}-${String(dateObj.day).padStart(2,'0')}`;
+    out[dateStr]=parseFloat(d.value)||d.value;
   }
   return out;
 };
@@ -462,7 +467,11 @@ const ghealthFetchHRVRange=async(startDateStr,endDateStr)=>{
   const out={};
   for(const point of(data?.dataPoints||[])){
     const d=point?.dailyHeartRateVariability;
-    if(d?.date&&d?.value!=null)out[d.date]=d.value;
+    if(!d)continue;
+    const dateObj=d.date;
+    if(!dateObj||d.value==null)continue;
+    const dateStr=`${dateObj.year}-${String(dateObj.month).padStart(2,'0')}-${String(dateObj.day).padStart(2,'0')}`;
+    out[dateStr]=parseFloat(d.value)||d.value;
   }
   return out;
 };
