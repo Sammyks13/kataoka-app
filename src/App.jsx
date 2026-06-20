@@ -947,11 +947,25 @@ function HomeScreen(){
           const ts=d?.properties?.timeseries?.[0];
           if(!ts)return;
           const details=ts.data.instant.details;
-          const symbol=ts.data.next_1_hours?.summary?.symbol_code||ts.data.next_6_hours?.summary?.symbol_code||null;
+          const next1=ts.data.next_1_hours;
+          const next6=ts.data.next_6_hours;
+          const symbol=next1?.summary?.symbol_code||next6?.summary?.symbol_code||null;
+          // Feels-like: wind chill + humidity factor (standard approximation)
+          const t=details.air_temperature||0;
+          const ws=details.wind_speed||0;
+          const rh=details.relative_humidity||50;
+          const windChill=ws>1.33?13.12+0.6215*t-11.37*Math.pow(ws*3.6,0.16)+0.3965*t*Math.pow(ws*3.6,0.16):t;
+          const humidex=t+(rh-30)*0.12; // simplified humidex for warm days
+          const feelsLike=t>10?Math.round(humidex):Math.round(windChill);
           setWeather({
-            temperature_2m:details.air_temperature,
+            temperature_2m:t,
+            feels_like:feelsLike,
             symbol_code:symbol,
             uv_index:details.ultraviolet_index_clear_sky||0,
+            wind_speed:Math.round(ws),
+            wind_direction:details.wind_from_direction||null,
+            precipitation_probability:next1?.details?.probability_of_precipitation??next6?.details?.probability_of_precipitation??null,
+            precipitation_amount:next1?.details?.precipitation_amount??null,
           });
         }).catch(()=>{});
     };
@@ -999,14 +1013,23 @@ function HomeScreen(){
         );
       })()}
 
-      {/* Weather — compact single line */}
-      <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:10,padding:"8px 12px",background:T.card}}>
+      {/* Weather — Yr/MET Norway, two-row display */}
+      <div style={{marginBottom:10,padding:"10px 12px",background:T.card}}>
         {weather?(
           <>
-            <span style={{fontFamily:"'Barlow Condensed',sans-serif",fontWeight:900,fontSize:22,lineHeight:1}}>{Math.round(weather.temperature_2m)}°</span>
-            <span style={{fontSize:16}}>{YR_ICON(weather.symbol_code)}</span>
-            <span style={{color:T.sub,fontSize:11,flex:1}}>{YR_LABEL(weather.symbol_code)} · {loc}</span>
-            <span style={{fontFamily:"'Barlow Condensed',sans-serif",fontWeight:900,fontSize:13,color:uv?.c}}>UV {Math.round(weather.uv_index||0)}</span>
+            {/* Row 1 — temp, icon, condition, location */}
+            <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:6}}>
+              <span style={{fontFamily:"'Barlow Condensed',sans-serif",fontWeight:900,fontSize:24,lineHeight:1}}>{Math.round(weather.temperature_2m)}°</span>
+              <span style={{fontSize:18}}>{YR_ICON(weather.symbol_code)}</span>
+              <span style={{color:T.sub,fontSize:11,flex:1}}>{YR_LABEL(weather.symbol_code)}{loc?" · "+loc:""}</span>
+            </div>
+            {/* Row 2 — feels-like, wind, rain chance, UV */}
+            <div style={{display:"flex",gap:14,flexWrap:"wrap"}}>
+              {weather.feels_like!=null&&<span style={{fontFamily:"'Barlow Condensed',sans-serif",fontWeight:700,fontSize:11,color:T.sub}}>FEELS {weather.feels_like}°</span>}
+              {weather.wind_speed!=null&&<span style={{fontFamily:"'Barlow Condensed',sans-serif",fontWeight:700,fontSize:11,color:T.sub}}>💨 {weather.wind_speed} m/s</span>}
+              {weather.precipitation_probability!=null&&<span style={{fontFamily:"'Barlow Condensed',sans-serif",fontWeight:700,fontSize:11,color:weather.precipitation_probability>60?"#7DF9FF":T.sub}}>🌧 {Math.round(weather.precipitation_probability)}%</span>}
+              <span style={{fontFamily:"'Barlow Condensed',sans-serif",fontWeight:700,fontSize:11,color:uv?.c}}>UV {Math.round(weather.uv_index||0)} {uv?.l}</span>
+            </div>
           </>
         ):(
           <span style={{color:"#444",fontSize:11,fontFamily:"'Barlow Condensed',sans-serif"}}>Loading weather…</span>
