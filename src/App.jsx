@@ -277,6 +277,7 @@ const GHEALTH_REDIRECT_URI=typeof window!=="undefined"?window.location.origin:"h
 const GHEALTH_SCOPES=[
   "https://www.googleapis.com/auth/googlehealth.sleep.readonly",
   "https://www.googleapis.com/auth/googlehealth.health_metrics_and_measurements.readonly",
+  "https://www.googleapis.com/auth/calendar.readonly",
 ].join(" ");
 
 // Generate a random PKCE code verifier
@@ -480,6 +481,39 @@ const ghealthFetchHRVRange=async(startDateStr,endDateStr)=>{
 const ghealthFetchHRV=async(dateStr)=>{
   const range=await ghealthFetchHRVRange(dateStr,dateStr);
   return range[dateStr]??null;
+};
+
+// ─── Google Calendar (read-only) ───────────────────────────────────────────────
+// Reuses the same Google OAuth token as Health (calendar.readonly scope added).
+// Fetches events for a given local date. Returns [{id, summary, start, end, allDay}].
+const gcalFetchEvents=async(dateStr)=>{
+  const token=await ghealthGetValidToken();
+  if(!token)return null;
+  // Build local-day time window in RFC3339
+  const dayStart=new Date(dateStr+'T00:00:00');
+  const dayEnd=new Date(dateStr+'T23:59:59');
+  const timeMin=encodeURIComponent(dayStart.toISOString());
+  const timeMax=encodeURIComponent(dayEnd.toISOString());
+  const url=`https://www.googleapis.com/calendar/v3/calendars/primary/events?timeMin=${timeMin}&timeMax=${timeMax}&singleEvents=true&orderBy=startTime&maxResults=50`;
+  const res=await fetch(url,{headers:{Authorization:`Bearer ${token}`}});
+  if(!res.ok)return null;
+  const data=await res.json();
+  const out=[];
+  for(const ev of(data?.items||[])){
+    if(ev.status==="cancelled")continue;
+    const allDay=!!ev.start?.date;
+    // Format times to HH:MM for timed events
+    const fmt=iso=>{try{return new Date(iso).toTimeString().slice(0,5);}catch{return "";}};
+    out.push({
+      id:ev.id,
+      summary:ev.summary||"(no title)",
+      start:allDay?"All day":fmt(ev.start?.dateTime),
+      end:allDay?"":fmt(ev.end?.dateTime),
+      colorId:ev.colorId||null,
+      allDay,
+    });
+  }
+  return out;
 };
 
 // ─── Ranks ────────────────────────────────────────────────────────────────────
@@ -798,7 +832,7 @@ function BodyMap({status}){
 // ─── TODAY CHECKLIST (live Google Calendar) ───────────────────────────────────
 const GCAL_COLORS={"1":"#7986CB","2":"#33B679","3":"#8E24AA","4":"#E67C73","5":"#F6BF26","6":"#F4511E","7":"#039BE5","8":"#616161","9":"#3F51B5","10":"#0B8043","11":"#D50000"};
 function TodayChecklist(){
-  const {T,apiKey}=useContext(Ctx);
+  const {T,ghealthConnected}=useContext(Ctx);
   const [evts,setEvts]=useState(null);
   const [ticked,setTicked]=useState({});
   const [loading,setLoading]=useState(false);
@@ -814,26 +848,14 @@ function TodayChecklist(){
 
   const loadForDate=async(dateStr)=>{
     setLoading(true);setErr(null);setEvts(null);
-    if(!apiKey){setErr('Add API key in Settings (ME tab)');setLoading(false);return;}
+    if(!ghealthConnected){setErr('Connect Google in HEALTH tab');setLoading(false);return;}
     try{
-      const resp=await fetch("https://api.anthropic.com/v1/messages",{
-        method:"POST",
-        headers:{"Content-Type":"application/json","x-api-key":apiKey,"anthropic-version":"2023-06-01","anthropic-dangerous-direct-browser-access":"true"},
-        body:JSON.stringify({
-          model:"claude-sonnet-4-20250514",
-          max_tokens:2000,
-          system:`Extract calendar events and return ONLY a valid JSON array. No markdown, no preamble. Each object: {"id":"...","summary":"...","start":"HH:MM","end":"HH:MM","colorId":"..."}. Exclude events whose summary starts with "YUZU:". Sort by start time ascending.`,
-          messages:[{role:"user",content:`Fetch all calendar events for ${dateStr} in Europe/Copenhagen timezone. JSON array only.`}],
-          mcp_servers:[{type:"url",url:"https://calendarmcp.googleapis.com/mcp/v1",name:"gcal"}]
-        })
-      });
-      if(!resp.ok)throw new Error('API error');
-      const data=await resp.json();
-      const txt=(data.content||[]).filter(b=>b.type==="text").map(b=>b.text).join("");
-      const clean=txt.replace(/```json|```/g,"").trim();
-      const parsed=JSON.parse(clean);
+      const events=await gcalFetchEvents(dateStr);
+      if(events===null)throw new Error('fetch failed');
+      // Exclude YUZU: prefixed events, matching prior behavior
+      const filtered=events.filter(e=>!e.summary.startsWith("YUZU:"));
       const t=await loadTicks(dateStr);
-      setEvts(parsed);setTicked(t);
+      setEvts(filtered);setTicked(t);
     }catch{setErr('tap to retry');}
     setLoading(false);
   };
