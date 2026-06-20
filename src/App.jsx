@@ -496,7 +496,12 @@ const gcalFetchEvents=async(dateStr)=>{
   const timeMax=encodeURIComponent(dayEnd.toISOString());
   const url=`https://www.googleapis.com/calendar/v3/calendars/primary/events?timeMin=${timeMin}&timeMax=${timeMax}&singleEvents=true&orderBy=startTime&maxResults=50`;
   const res=await fetch(url,{headers:{Authorization:`Bearer ${token}`}});
-  if(!res.ok)return null;
+  if(!res.ok){
+    let body="";try{body=JSON.stringify(await res.json()).slice(0,200);}catch{}
+    window._gcalDebug=`status:${res.status} ${body}`;
+    return null;
+  }
+  window._gcalDebug=null;
   const data=await res.json();
   const out=[];
   for(const ev of(data?.items||[])){
@@ -851,12 +856,12 @@ function TodayChecklist(){
     if(!ghealthConnected){setErr('Connect Google in HEALTH tab');setLoading(false);return;}
     try{
       const events=await gcalFetchEvents(dateStr);
-      if(events===null)throw new Error('fetch failed');
+      if(events===null)throw new Error(window._gcalDebug||'fetch failed');
       // Exclude YUZU: prefixed events, matching prior behavior
       const filtered=events.filter(e=>!e.summary.startsWith("YUZU:"));
       const t=await loadTicks(dateStr);
       setEvts(filtered);setTicked(t);
-    }catch{setErr('tap to retry');}
+    }catch(e){setErr(String(e.message||e).slice(0,120));}
     setLoading(false);
   };
 
