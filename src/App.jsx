@@ -218,10 +218,9 @@ const muscleRank = (muscle, prs, bw) => {
     const catMatch=CATEGORY_PATTERNS.find(({match})=>match.test(name));
     const cat=catMatch?catMatch.cat:muscle.cat;
     const thresh=CATEGORY_THRESHOLDS[cat]||CATEGORY_THRESHOLDS.generic;
-    const r=pr.rm/bw;
-    const idx=r>=thresh[4]?4:r>=thresh[3]?3:r>=thresh[2]?2:r>=thresh[1]?1:r>=thresh[0]?0:-1;
-    // This exercise's tier, judged fairly against its own category — take whichever exercise
-    // gives this muscle its best-earned tier (e.g. a strong bench beats a so-so fly).
+    // Convert ratio thresholds to absolute kg for this bodyweight
+    const rawThresholds=thresh.map(r=>r*bw);
+    const idx=get10TierIdx(pr.rm,rawThresholds,1); // no age factor here, muscle rank is raw
     if(idx>bestIdx){bestIdx=idx;bestRM=pr.rm;}
   }
   if(bestIdx<0)return bestRM>0?{n:"UNTRAINED",c:"#4B5563",pct:0,rm:Math.round(bestRM)}:null;
@@ -598,35 +597,33 @@ const RANKS=[
 // Derive a physique archetype from which muscles are strongest
 const getArchetype=(muscleRanks,prs,bw)=>{
   if(!muscleRanks||Object.keys(muscleRanks).length===0)return null;
-  const tierOrder=["ELITE","ADVANCED","INTERMEDIATE","NOVICE","BEGINNER","UNTRAINED"];
-  const score=n=>Math.max(0,5-tierOrder.indexOf(n||"UNTRAINED"));
-  // Muscle group scores
+  // Score by tier index in new 10-tier system (0=UNTRAINED, 9=SOVEREIGN)
+  const tierOrder=["UNTRAINED","BRONZE","SILVER","GOLD","PLATINUM","DIAMOND","ELITE","ADVANCED","APEX","SUPERHUMAN","ABSOLUTE"];
+  const score=n=>Math.max(0,tierOrder.indexOf(n||"UNTRAINED"));
+  // Muscle group scores (0-10 scale)
   const push=(score(muscleRanks.CHEST?.n)+score(muscleRanks.DELTS_F?.n)+score(muscleRanks.TRICEPS?.n))/3;
   const pull=(score(muscleRanks.LATS?.n)+score(muscleRanks.BICEPS?.n)+score(muscleRanks.TRAPS?.n))/3;
   const legs=(score(muscleRanks.QUADS?.n)+score(muscleRanks.HAMSTRINGS?.n)+score(muscleRanks.GLUTES?.n))/3;
   const shoulders=score(muscleRanks.DELTS_L?.n);
   const core=score(muscleRanks.CORE?.n);
-  // Determine dominant pattern
   const dominant=Object.entries({push,pull,legs,shoulders,core}).sort((a,b)=>b[1]-a[1]);
   const top=dominant[0][0];
   const second=dominant[1][0];
   const overall=(push+pull+legs+shoulders)/4;
-  // Check for hang clean (Olympic lifting)
   const hasOlympic=Object.keys(prs||{}).some(k=>/hang.?clean|power.?clean|snatch/i.test(k));
   const hasZercher=Object.keys(prs||{}).some(k=>/zercher/i.test(k));
-  // Archetype assignment
-  if(overall>=3.5)return{name:"SOVEREIGN",desc:"Exceptional across every movement pattern."};
+  if(overall>=7)return{name:"SOVEREIGN",desc:"Exceptional across every movement pattern."};
   if(hasOlympic&&push>pull){
     if(hasZercher)return{name:"THE ATHLETE",desc:"Olympic lifts, Zercher squat, upper body power. Explosive + structural strength."};
     return{name:"POWER ATHLETE",desc:"Olympic lifting mechanics combined with pressing strength."};
   }
   if(top==="pull"&&second==="push")return{name:"BACK DOMINANT",desc:"Pull strength leads. Built like a climber with serious pressing to match."};
   if(top==="push"&&second==="pull")return{name:"PRESS DOMINANT",desc:"Upper push strength is the standout. Bench and pressing movements lead."};
-  if(top==="legs"&&overall>2)return{name:"IRON BASE",desc:"Lower body leads. Squat pattern strength is the foundation."};
+  if(top==="legs"&&overall>4)return{name:"IRON BASE",desc:"Lower body leads. Squat pattern strength is the foundation."};
   if(top==="shoulders")return{name:"CANNONBALL",desc:"Shoulder strength dominates. Wide, visible from a distance."};
-  if(top==="push"&&push>2&&pull>1.5&&legs<1.5)return{name:"UPPER BODY SPECIALIST",desc:"Upper body is fully developed. Legs are the weak link."};
-  if(top==="legs"&&legs>2&&push<1.5)return{name:"LEG DAY LOYALIST",desc:"Lower body is strong. Upper body hasn't caught up."};
-  if(Math.max(push,pull,legs,shoulders)-Math.min(push,pull,legs,shoulders)<0.8)return{name:"BALANCED",desc:"No obvious weak point. Strength is proportional across all patterns."};
+  if(top==="push"&&push>4&&pull>3&&legs<3)return{name:"UPPER BODY SPECIALIST",desc:"Upper body is fully developed. Legs are the weak link."};
+  if(top==="legs"&&legs>4&&push<3)return{name:"LEG DAY LOYALIST",desc:"Lower body is strong. Upper body hasn't caught up."};
+  if(Math.max(push,pull,legs,shoulders)-Math.min(push,pull,legs,shoulders)<2)return{name:"BALANCED",desc:"No obvious weak point. Strength is proportional across all patterns."};
   return{name:"IN PROGRESS",desc:"Building a base. No dominant pattern has emerged yet."};
 };
 
@@ -659,46 +656,68 @@ const slThresholds=(table,bw)=>{
   return table[lo].map((v,i)=>Math.round(v+t*(table[hi][i]-v)));
 };
 const SL_TIERS=[
-  {n:"BEGINNER",    c:"#9CA3AF", pct:5,  desc:"stronger than ~5% of men your build",  ratio:"1 in 20"},
-  {n:"NOVICE",      c:"#60A5FA", pct:25, desc:"stronger than ~25% of men your build", ratio:"1 in 4"},
-  {n:"INTERMEDIATE",c:"#34D399", pct:50, desc:"stronger than ~50% of men your build", ratio:"1 in 2"},
-  {n:"ADVANCED",    c:"#F59E0B", pct:75, desc:"stronger than ~75% of men your build", ratio:"top 25%"},
-  {n:"ELITE",       c:"#FF3B5C", pct:95, desc:"stronger than ~95% of men your build", ratio:"top 5%"},
+  {n:"BRONZE",     c:"#92400E", pct:5,  desc:"Learning the mechanics and stabilizing the weight.",                           ratio:"bottom 10%"},
+  {n:"SILVER",     c:"#9CA3AF", pct:15, desc:"Developing baseline strength; execution looks clean.",                         ratio:"1 in 7"},
+  {n:"GOLD",       c:"#D97706", pct:30, desc:"A solid, respectable lift. Well above untrained averages.",                   ratio:"top 70%"},
+  {n:"PLATINUM",   c:"#7DF9FF", pct:45, desc:"Heavy weight. You are officially one of the strongest in a casual gym.",      ratio:"top 55%"},
+  {n:"DIAMOND",    c:"#60A5FA", pct:60, desc:"Advanced territory. The weight on the bar turns heads.",                       ratio:"top 40%"},
+  {n:"ELITE",      c:"#34D399", pct:72, desc:"Exceptional efficiency and power. True competitive-level strength.",           ratio:"top 28%"},
+  {n:"ADVANCED",   c:"#A855F7", pct:83, desc:"Pushing the absolute ceiling of natural human capabilities.",                 ratio:"top 17%"},
+  {n:"APEX",       c:"#FF6B35", pct:91, desc:"The peak of performance for this specific movement.",                         ratio:"top 9%"},
+  {n:"SUPERHUMAN", c:"#FF3B5C", pct:96, desc:"Freakish, rare strength that defies normal human limits.",                   ratio:"top 4%"},
+  {n:"ABSOLUTE",   c:"#FF00FF", pct:99, desc:"The maximum possible tier. Flawless execution of ultimate power.",            ratio:"top 1%"},
 ];
 // Age factors from strengthlevel.com age-adjusted tables (ratio vs peak adult 25-40)
 const AGE_FACTORS=[[15,0.857],[20,0.980],[25,1.0],[30,1.0],[35,1.0],[40,1.0],[45,0.947],[50,0.885],[55,0.816],[60,0.745],[65,0.674],[70,0.612],[75,0.551],[80,0.490]];
 const computeAge=dob=>{if(!dob)return 25;const b=new Date(dob+'T00:00:00'),t=new Date();let a=t.getFullYear()-b.getFullYear();const m=t.getMonth()-b.getMonth();if(m<0||(m===0&&t.getDate()<b.getDate()))a--;return a;};
 const ageMultiplier=age=>{const a=Math.max(15,Math.min(80,age));let lo=AGE_FACTORS[0],hi=AGE_FACTORS[AGE_FACTORS.length-1];for(let i=0;i<AGE_FACTORS.length-1;i++){if(AGE_FACTORS[i][0]<=a&&AGE_FACTORS[i+1][0]>=a){lo=AGE_FACTORS[i];hi=AGE_FACTORS[i+1];break;}}const t2=hi[0]===lo[0]?0:(a-lo[0])/(hi[0]-lo[0]);return lo[1]+t2*(hi[1]-lo[1]);};
 // Universal rank — works for any exercise via category patterns, falls back to SL for big lifts
+// Maps to 10 SL_TIERS by splitting each of the 5 SL bands into 2 sub-tiers:
+//   IRON+BRONZE = Beginner band, SILVER+GOLD = Novice, PLATINUM+DIAMOND = Intermediate,
+//   MASTER+GRANDMASTER = Advanced, APEX+SOVEREIGN = Elite.
+// Within each band the midpoint determines which sub-tier you're in.
+const get10TierIdx=(rm1,thresholds,af=1)=>{
+  const[b,n,i,a,e]=thresholds.map(v=>Math.round(v*(af||1)));
+  if(rm1<b)return-1; // UNTRAINED
+  if(rm1<n){const mid=Math.round((b+n)/2);return rm1>=mid?1:0;} // IRON/BRONZE
+  if(rm1<i){const mid=Math.round((n+i)/2);return rm1>=mid?3:2;} // SILVER/GOLD
+  if(rm1<a){const mid=Math.round((i+a)/2);return rm1>=mid?5:4;} // PLATINUM/DIAMOND
+  if(rm1<e){const mid=Math.round((a+e)/2);return rm1>=mid?7:6;} // MASTER/GRANDMASTER
+  const mid=Math.round(e+(e-a)*0.5);return rm1>=mid?9:8;        // APEX/SOVEREIGN
+};
 const getUniversalRank=(name,rm1,bw,dob=null)=>{
   const age=dob?computeAge(dob):25;
   const af=ageMultiplier(age);
   // Try SL table first (most accurate)
   const table=name?matchSL(name):null;
   if(table){
-    const[b,n,i,a,e]=slThresholds(table,bw).map(v=>Math.round(v*af));
-    const idx=rm1>=e?4:rm1>=a?3:rm1>=i?2:rm1>=n?1:rm1>=b?0:-1;
+    const thresholds=slThresholds(table,bw);
+    const idx=get10TierIdx(rm1,thresholds,af);
     const tier=idx>=0?SL_TIERS[idx]:null;
-    return{n:tier?tier.n:"UNTRAINED",c:tier?tier.c:"#4B5563",pct:tier?tier.pct:0,desc:tier?tier.desc:"below beginner standards",ratio:tier?tier.ratio:"",rm:Math.round(rm1),source:"sl",next:[b,n,i,a,e][idx+1]||null};
+    const[b,n,i,a,e]=thresholds.map(v=>Math.round(v*af));
+    const allT=[b,Math.round((b+n)/2),n,Math.round((n+i)/2),i,Math.round((i+a)/2),a,Math.round((a+e)/2),e,Math.round(e+(e-a)*0.5)];
+    return{n:tier?tier.n:"UNTRAINED",c:tier?tier.c:"#4B5563",pct:tier?tier.pct:0,desc:tier?tier.desc:"below beginner standards",ratio:tier?tier.ratio:"",rm:Math.round(rm1),source:"sl",next:allT[idx+1]||null};
   }
   // Try category pattern
   if(name){
     const n2=name.toLowerCase();
     for(const{match,cat}of CATEGORY_PATTERNS){
       if(match.test(n2)){
-        const[b,nv,i,a,e]=CATEGORY_THRESHOLDS[cat].map(r=>Math.round(r*bw*af));
-        const r=rm1/bw/af;
         const thresh=CATEGORY_THRESHOLDS[cat];
-        const idx=r>=thresh[4]?4:r>=thresh[3]?3:r>=thresh[2]?2:r>=thresh[1]?1:r>=thresh[0]?0:-1;
+        const rawThresholds=thresh.map(r=>r*bw);
+        const idx=get10TierIdx(rm1,rawThresholds,af);
         const tier=idx>=0?SL_TIERS[idx]:null;
-        return{n:tier?tier.n:"UNTRAINED",c:tier?tier.c:"#4B5563",pct:tier?tier.pct:0,desc:tier?tier.desc:"below beginner standards",ratio:tier?tier.ratio:"",rm:Math.round(rm1),source:"cat",cat,next:[b,nv,i,a,e][idx+1]||null};
+        const[b,nv,i,a,e]=rawThresholds.map(v=>Math.round(v*af));
+        const allT=[b,Math.round((b+nv)/2),nv,Math.round((nv+i)/2),i,Math.round((i+a)/2),a,Math.round((a+e)/2),e,Math.round(e+(e-a)*0.5)];
+        return{n:tier?tier.n:"UNTRAINED",c:tier?tier.c:"#4B5563",pct:tier?tier.pct:0,desc:tier?tier.desc:"below beginner standards",ratio:tier?tier.ratio:"",rm:Math.round(rm1),source:"cat",cat,next:allT[idx+1]||null};
       }
     }
   }
   // Generic ratio fallback
   const r=rm1/bw;
   const fallbackTiers=CATEGORY_THRESHOLDS.generic;
-  const idx=r>=fallbackTiers[4]?4:r>=fallbackTiers[3]?3:r>=fallbackTiers[2]?2:r>=fallbackTiers[1]?1:r>=fallbackTiers[0]?0:-1;
+  const rawThresholds=fallbackTiers.map(t=>t*bw);
+  const idx=get10TierIdx(rm1,rawThresholds,af);
   const tier=idx>=0?SL_TIERS[idx]:null;
   return{n:tier?tier.n:"UNTRAINED",c:tier?tier.c:"#4B5563",pct:tier?tier.pct:0,desc:tier?tier.desc:"below beginner standards",ratio:tier?tier.ratio:"",rm:Math.round(rm1),source:"ratio"};
 };
@@ -3855,7 +3874,7 @@ function AddEvent({saveComingSoon,comingSoon}){
 
 // ─── PHYSIQUE SCREEN ──────────────────────────────────────────────────────────
 function PhysiqueScreen(){
-  const {T,morningLogs,nightLogs,workoutLogs,bw,saveBw,apiKey}=useContext(Ctx);
+  const {T,morningLogs,nightLogs,workoutLogs,bw,saveBw,apiKey,prs,userDOB}=useContext(Ctx);
   const [physTab,setPhysTab]=useState("log");
   const [phase,setPhase]=useState(()=>{try{const v=localStorage.getItem('k3_phase');return v?JSON.parse(v):{type:'bulk',start:todayStr(),target:75,startWeight:65};}catch{return{type:'bulk',start:todayStr(),target:75,startWeight:65};}});
   const [weighIns,setWeighIns]=useState(()=>{try{const v=localStorage.getItem('k3_weighins');return v?JSON.parse(v):[];}catch{return [];}});
@@ -3872,6 +3891,12 @@ function PhysiqueScreen(){
   const [editBuf,setEditBuf]=useState({});
   const [expandedEntry,setExpandedEntry]=useState(null); // date string of expanded grid item
   const H={fontFamily:"'Barlow Condensed',sans-serif",fontWeight:900,textTransform:"uppercase"};
+
+  // Compute archetype from PRs + muscle ranks
+  const BODY_MUSCLES_P=[{key:"CHEST",cat:"hpush"},{key:"LATS",cat:"vpull"},{key:"DELTS_F",cat:"hpush"},{key:"DELTS_L",cat:"iso"},{key:"TRICEPS",cat:"iso"},{key:"BICEPS",cat:"iso"},{key:"TRAPS",cat:"iso"},{key:"QUADS",cat:"squat"},{key:"HAMSTRINGS",cat:"hinge"},{key:"GLUTES",cat:"hinge"},{key:"CORE",cat:"generic"}];
+  const physMuscleMap={};
+  BODY_MUSCLES_P.forEach(m=>{const r=muscleRank(m,prs,bw);if(r)physMuscleMap[m.key]=r;});
+  const physArchetype=getArchetype(physMuscleMap,prs,bw);
 
   const savePhase=v=>{setPhase(v);localStorage.setItem('k3_phase',JSON.stringify(v));};
   const saveWeighIns=v=>{setWeighIns(v);localStorage.setItem('k3_weighins',JSON.stringify(v));};
@@ -3958,6 +3983,16 @@ function PhysiqueScreen(){
 
       {/* ── LOG TAB ── */}
       {physTab==="log"&&(<>
+
+        {/* Archetype card */}
+        {physArchetype&&(
+          <div style={{background:T.card,padding:"12px 14px",marginBottom:20,borderLeft:"3px solid #FF6B35"}}>
+            <div style={{...H,fontSize:9,color:T.sub,letterSpacing:"0.12em",marginBottom:3}}>ARCHETYPE</div>
+            <div style={{...H,fontSize:20,color:"#FF6B35",lineHeight:1,marginBottom:3}}>{physArchetype.name}</div>
+            <div style={{color:T.sub,fontSize:11}}>{physArchetype.desc}</div>
+          </div>
+        )}
+
         {/* Phase tracker */}
         <div style={{marginBottom:24}}>
           <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
@@ -4620,10 +4655,10 @@ function MeScreen(){
   const muscleRankMap={};
   const BODY_MUSCLES=[{key:"CHEST",cat:"hpush"},{key:"LATS",cat:"vpull"},{key:"DELTS_F",cat:"hpush"},{key:"DELTS_L",cat:"iso"},{key:"TRICEPS",cat:"iso"},{key:"BICEPS",cat:"iso"},{key:"TRAPS",cat:"iso"},{key:"QUADS",cat:"squat"},{key:"HAMSTRINGS",cat:"hinge"},{key:"GLUTES",cat:"hinge"},{key:"CORE",cat:"generic"}];
   BODY_MUSCLES.forEach(m=>{const r=muscleRank(m,prs,bw);if(r)muscleRankMap[m.key]=r;});
-  const muscleScores=Object.values(muscleRankMap).map(r=>{const idx=["UNTRAINED","BEGINNER","NOVICE","INTERMEDIATE","ADVANCED","ELITE"].indexOf(r.n||"UNTRAINED");return Math.max(0,idx);});
+  const muscleScores=Object.values(muscleRankMap).map(r=>{const idx=["UNTRAINED","BRONZE","SILVER","GOLD","PLATINUM","DIAMOND","ELITE","ADVANCED","APEX","SUPERHUMAN","ABSOLUTE"].indexOf(r.n||"UNTRAINED");return Math.max(0,idx);});
   const avgMuscleScore=muscleScores.length?muscleScores.reduce((s,v)=>s+v,0)/muscleScores.length:0;
-  // Map to 0-3+ scale for RANKS lookup
-  const rankRatio=avgMuscleScore/5*3;
+  // Map to 0-3+ scale for RANKS lookup (0-10 tier scale → 0-3 ratio range)
+  const rankRatio=avgMuscleScore/10*3;
   const bodyRank=RANKS.find(x=>rankRatio>=x.min)||RANKS[RANKS.length-1];
   const archetype=getArchetype(muscleRankMap,prs,bw);
   const latestFollowers=soMeFollowers.length?[...soMeFollowers].sort((a,b)=>b.date.localeCompare(a.date))[0]:null;
