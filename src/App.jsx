@@ -522,7 +522,53 @@ const gcalFetchEvents=async(dateStr)=>{
 };
 
 // ─── Ranks ────────────────────────────────────────────────────────────────────
-const RANKS=[{min:2.5,n:"GRANDMASTER",c:"#FFD700"},{min:2.0,n:"MASTER",c:"#FF6B35"},{min:1.75,n:"DIAMOND",c:"#7DF9FF"},{min:1.5,n:"PLATINUM",c:"#D0D0D0"},{min:1.25,n:"GOLD",c:"#FFD700"},{min:1.0,n:"SILVER",c:"#C0C0C0"},{min:0.75,n:"BRONZE",c:"#CD7F32"},{min:0.5,n:"IRON",c:"#888"},{min:0,n:"ROOKIE",c:"#555"}];
+const RANKS=[
+  {min:3.0, n:"SOVEREIGN",    c:"#FF00FF", desc:"Inhuman. Top 0.1%."},
+  {min:2.5, n:"WARLORD",      c:"#FFD700", desc:"Elite among elite. Top 1%."},
+  {min:2.1, n:"JUGGERNAUT",   c:"#FF6B35", desc:"Exceptional across the board. Top 5%."},
+  {min:1.8, n:"SENTINEL",     c:"#FF3B5C", desc:"Well beyond average. Top 10%."},
+  {min:1.5, n:"APEX",         c:"#7DF9FF", desc:"Strong athlete. Top 20%."},
+  {min:1.2, n:"FORGED",       c:"#A855F7", desc:"Visibly trained. Top 35%."},
+  {min:0.9, n:"BUILDER",      c:"#34D399", desc:"Solid foundation. Top 50%."},
+  {min:0.65,n:"PROSPECT",     c:"#60A5FA", desc:"Progress visible. Top 65%."},
+  {min:0.4, n:"RECRUIT",      c:"#9CA3AF", desc:"Early stage. Started the work."},
+  {min:0,   n:"UNTESTED",     c:"#4B5563", desc:"No data yet."},
+];
+
+// Derive a physique archetype from which muscles are strongest
+const getArchetype=(muscleRanks,prs,bw)=>{
+  if(!muscleRanks||Object.keys(muscleRanks).length===0)return null;
+  const tierOrder=["ELITE","ADVANCED","INTERMEDIATE","NOVICE","BEGINNER","UNTRAINED"];
+  const score=n=>Math.max(0,5-tierOrder.indexOf(n||"UNTRAINED"));
+  // Muscle group scores
+  const push=(score(muscleRanks.CHEST?.n)+score(muscleRanks.DELTS_F?.n)+score(muscleRanks.TRICEPS?.n))/3;
+  const pull=(score(muscleRanks.LATS?.n)+score(muscleRanks.BICEPS?.n)+score(muscleRanks.TRAPS?.n))/3;
+  const legs=(score(muscleRanks.QUADS?.n)+score(muscleRanks.HAMSTRINGS?.n)+score(muscleRanks.GLUTES?.n))/3;
+  const shoulders=score(muscleRanks.DELTS_L?.n);
+  const core=score(muscleRanks.CORE?.n);
+  // Determine dominant pattern
+  const dominant=Object.entries({push,pull,legs,shoulders,core}).sort((a,b)=>b[1]-a[1]);
+  const top=dominant[0][0];
+  const second=dominant[1][0];
+  const overall=(push+pull+legs+shoulders)/4;
+  // Check for hang clean (Olympic lifting)
+  const hasOlympic=Object.keys(prs||{}).some(k=>/hang.?clean|power.?clean|snatch/i.test(k));
+  const hasZercher=Object.keys(prs||{}).some(k=>/zercher/i.test(k));
+  // Archetype assignment
+  if(overall>=3.5)return{name:"SOVEREIGN",desc:"Exceptional across every movement pattern."};
+  if(hasOlympic&&push>pull){
+    if(hasZercher)return{name:"THE ATHLETE",desc:"Olympic lifts, Zercher squat, upper body power. Explosive + structural strength."};
+    return{name:"POWER ATHLETE",desc:"Olympic lifting mechanics combined with pressing strength."};
+  }
+  if(top==="pull"&&second==="push")return{name:"BACK DOMINANT",desc:"Pull strength leads. Built like a climber with serious pressing to match."};
+  if(top==="push"&&second==="pull")return{name:"PRESS DOMINANT",desc:"Upper push strength is the standout. Bench and pressing movements lead."};
+  if(top==="legs"&&overall>2)return{name:"IRON BASE",desc:"Lower body leads. Squat pattern strength is the foundation."};
+  if(top==="shoulders")return{name:"CANNONBALL",desc:"Shoulder strength dominates. Wide, visible from a distance."};
+  if(top==="push"&&push>2&&pull>1.5&&legs<1.5)return{name:"UPPER BODY SPECIALIST",desc:"Upper body is fully developed. Legs are the weak link."};
+  if(top==="legs"&&legs>2&&push<1.5)return{name:"LEG DAY LOYALIST",desc:"Lower body is strong. Upper body hasn't caught up."};
+  if(Math.max(push,pull,legs,shoulders)-Math.min(push,pull,legs,shoulders)<0.8)return{name:"BALANCED",desc:"No obvious weak point. Strength is proportional across all patterns."};
+  return{name:"IN PROGRESS",desc:"Building a base. No dominant pattern has emerged yet."};
+};
 
 // StrengthLevel.com actual standards (male, kg). {bw→[beg,nov,int,adv,elite]}
 const SL={
@@ -2622,6 +2668,7 @@ function DailyScreen(){
       const ex=weeklyReviews.find(r=>r.weekStart===currentWeekKey);
       if(ex){setWkRating(ex.rating||null);setWkWorked(ex.worked||"");setWkDidnt(ex.didnt||"");setWkNote(ex.note||"");setWkSaved(true);}
       else{setWkRating(null);setWkWorked("");setWkDidnt("");setWkNote("");setWkSaved(false);}
+      setWkTab("this");
     }
   },[view,currentWeekKey]);
 
@@ -2653,6 +2700,7 @@ function DailyScreen(){
   const [nWin,setNWin]=useState("");const [nFail,setNFail]=useState("");
   const [nMissed,setNMissed]=useState("");const [nGratitude,setNGratitude]=useState("");
   const [wkRating,setWkRating]=useState(null);const [wkWorked,setWkWorked]=useState("");const [wkDidnt,setWkDidnt]=useState("");const [wkNote,setWkNote]=useState("");const [wkSaved,setWkSaved]=useState(false);
+  const [wkTab,setWkTab]=useState("this");
   const [editDate,setEditDate]=useState(null);
   const [editBuf,setEditBuf]=useState({});
 
@@ -2837,6 +2885,7 @@ function DailyScreen(){
     const gratitudes=wkNL.filter(l=>l.gratitude).map(l=>l.gratitude);
     const weekKey=weekStart.toLocaleDateString('sv-SE');
     const existing=weeklyReviews.find(r=>r.weekStart===weekKey);
+    const prevReviews=[...weeklyReviews].filter(r=>r.weekStart!==weekKey).sort((a,b)=>b.weekStart.localeCompare(a.weekStart));
 
     const saveReview=async()=>{
       const entry={id:weekKey,weekStart:weekKey,rating:wkRating,worked:wkWorked,didnt:wkDidnt,note:wkNote,
@@ -2851,7 +2900,6 @@ function DailyScreen(){
         <div style={{...H,fontSize:20,color,lineHeight:1}}>{val!==null&&val!==undefined?val:"—"}</div>
       </div>
     );
-    const prevReviews=[...weeklyReviews].filter(r=>r.weekStart!==weekKey).sort((a,b)=>b.weekStart.localeCompare(a.weekStart));
 
     return(
       <div style={{padding:"24px 20px"}}>
@@ -2859,56 +2907,71 @@ function DailyScreen(){
           <InnerBack/>
           <div style={{...H,fontSize:28}}>WEEKLY REVIEW</div>
         </div>
-        <div style={{color:T.sub,fontSize:11,marginBottom:24,paddingLeft:34}}>
+        <div style={{color:T.sub,fontSize:11,marginBottom:16,paddingLeft:34}}>
           {weekStart.toLocaleDateString("en-GB",{day:"numeric",month:"short"})} – {new Date(weekDates[6]+'T12:00:00').toLocaleDateString("en-GB",{day:"numeric",month:"short"})}
         </div>
 
-        <div style={{...H,fontSize:10,color:T.sub,letterSpacing:"0.12em",marginBottom:10}}>THIS WEEK — AUTO</div>
-        <div style={{display:"flex",gap:8,flexWrap:"wrap",marginBottom:16}}>
-          {sb("WORKOUTS",wkWO.length,"#FF6B35")}
-          {sb("AVG SLEEP",avgSleep?avgSleep+"h":null,"#7DF9FF")}
-          {sb("AVG MOOD",avgMood,avgMood>=7?"#39FF14":avgMood>=5?"#FFD700":"#FF3B5C")}
-          {sb("AVG ENERGY",avgEnergy,"#D0D0D0")}
-          {barberPct!==null&&sb("BARBER %",barberPct+"%","#A78BFA")}
-        </div>
-
-        {gratitudes.length>0&&(
-          <div style={{marginBottom:20}}>
-            <div style={{...H,fontSize:10,color:T.sub,letterSpacing:"0.1em",marginBottom:8}}>GRATEFUL FOR THIS WEEK</div>
-            {gratitudes.map((g,i)=>(
-              <div key={i} style={{borderLeft:"2px solid #333",paddingLeft:10,marginBottom:8,color:T.sub,fontSize:13,fontStyle:"italic"}}>"{g}"</div>
-            ))}
-          </div>
-        )}
-
-        <Divider/>
-        <div style={{...H,fontSize:10,color:T.sub,letterSpacing:"0.12em",marginBottom:10}}>WEEK RATING</div>
-        <div style={{display:"flex",gap:4,marginBottom:20}}>
-          {[1,2,3,4,5,6,7,8,9,10].map(n=>(
-            <button key={n} onClick={()=>setWkRating(n)} style={{flex:1,padding:"9px 0",background:wkRating===n?T.text:"transparent",color:wkRating===n?T.bg:T.sub,border:`1px solid ${wkRating===n?T.text:"#222"}`,borderRadius:0,...H,fontSize:11,cursor:"pointer"}}>{n}</button>
+        {/* Tabs */}
+        <div style={{display:"flex",borderBottom:"1px solid #222",marginBottom:20}}>
+          {[["this","THIS WEEK"],["history","HISTORY"]].map(([id,l])=>(
+            <button key={id} onClick={()=>setWkTab(id)} style={{flex:1,background:"transparent",border:"none",
+              borderBottom:`2px solid ${wkTab===id?T.text:"transparent"}`,color:wkTab===id?T.text:T.sub,
+              padding:"10px 0",marginBottom:-1,...H,fontSize:12,cursor:"pointer"}}>{l}</button>
           ))}
         </div>
 
-        {[["WHAT WORKED",wkWorked,setWkWorked,"What went well..."],["WHAT DIDN'T",wkDidnt,setWkDidnt,"What fell short..."],["NOTE FOR NEXT WEEK",wkNote,setWkNote,"One adjustment..."]].map(([l,v,sv,ph])=>(
-          <div key={l} style={{marginBottom:14}}>
-            <div style={{...H,fontSize:10,color:T.sub,letterSpacing:"0.1em",marginBottom:6}}>{l}</div>
-            <textarea value={v} onChange={e=>sv(e.target.value)} placeholder={ph} style={ta}/>
+        {/* ── THIS WEEK TAB ── */}
+        {wkTab==="this"&&(<>
+          <div style={{...H,fontSize:10,color:T.sub,letterSpacing:"0.12em",marginBottom:10}}>AUTO — THIS WEEK</div>
+          <div style={{display:"flex",gap:8,flexWrap:"wrap",marginBottom:16}}>
+            {sb("WORKOUTS",wkWO.length,"#FF6B35")}
+            {sb("AVG SLEEP",avgSleep?avgSleep+"h":null,"#7DF9FF")}
+            {sb("AVG MOOD",avgMood,avgMood>=7?"#39FF14":avgMood>=5?"#FFD700":"#FF3B5C")}
+            {sb("AVG ENERGY",avgEnergy,"#D0D0D0")}
+            {barberPct!==null&&sb("BARBER %",barberPct+"%","#A78BFA")}
           </div>
-        ))}
-        <Btn label={wkSaved?"SAVED ✓":"SAVE REVIEW"} onClick={saveReview} style={{marginBottom:12}}/>
-        <AiWeeklySummary weekData={{workouts:wkWO.length,avgSleep,avgMood,avgEnergy,barberPct,gratitudes,worked:wkWorked,didnt:wkDidnt,note:wkNote,rating:wkRating}} morningLogs={wkML} nightLogs={wkNL} workoutLogs={wkWO}/>
 
-        {prevReviews.length>0&&(<>
+          {gratitudes.length>0&&(
+            <div style={{marginBottom:20}}>
+              <div style={{...H,fontSize:10,color:T.sub,letterSpacing:"0.1em",marginBottom:8}}>GRATEFUL FOR THIS WEEK</div>
+              {gratitudes.map((g,i)=>(
+                <div key={i} style={{borderLeft:"2px solid #333",paddingLeft:10,marginBottom:8,color:T.sub,fontSize:13,fontStyle:"italic"}}>"{g}"</div>
+              ))}
+            </div>
+          )}
+
           <Divider/>
-          <div style={{...H,fontSize:10,color:T.sub,letterSpacing:"0.12em",marginBottom:14}}>PAST REVIEWS</div>
-          {prevReviews.slice(0,6).map(r=>(
+          <div style={{...H,fontSize:10,color:T.sub,letterSpacing:"0.12em",marginBottom:10}}>WEEK RATING</div>
+          <div style={{display:"flex",gap:4,marginBottom:20}}>
+            {[1,2,3,4,5,6,7,8,9,10].map(n=>(
+              <button key={n} onClick={()=>setWkRating(n)} style={{flex:1,padding:"9px 0",background:wkRating===n?T.text:"transparent",color:wkRating===n?T.bg:T.sub,border:`1px solid ${wkRating===n?T.text:"#222"}`,borderRadius:0,...H,fontSize:11,cursor:"pointer"}}>{n}</button>
+            ))}
+          </div>
+
+          {[["WHAT WORKED",wkWorked,setWkWorked,"What went well..."],["WHAT DIDN'T",wkDidnt,setWkDidnt,"What fell short..."],["NOTE FOR NEXT WEEK",wkNote,setWkNote,"One adjustment..."]].map(([l,v,sv,ph])=>(
+            <div key={l} style={{marginBottom:14}}>
+              <div style={{...H,fontSize:10,color:T.sub,letterSpacing:"0.1em",marginBottom:6}}>{l}</div>
+              <textarea value={v} onChange={e=>sv(e.target.value)} placeholder={ph} style={ta}/>
+            </div>
+          ))}
+
+          <Btn label={wkSaved?"SAVED ✓ — VIEW HISTORY":"SAVE REVIEW"} onClick={async()=>{await saveReview();setWkTab("history");}} style={{marginBottom:12}}/>
+          <AiWeeklySummary weekData={{workouts:wkWO.length,avgSleep,avgMood,avgEnergy,barberPct,gratitudes,worked:wkWorked,didnt:wkDidnt,note:wkNote,rating:wkRating}} morningLogs={wkML} nightLogs={wkNL} workoutLogs={wkWO}/>
+        </>)}
+
+        {/* ── HISTORY TAB ── */}
+        {wkTab==="history"&&(<>
+          {prevReviews.length===0&&!existing&&(
+            <div style={{color:T.sub,fontSize:12,paddingTop:20,textAlign:"center"}}>No reviews saved yet.</div>
+          )}
+          {[existing,...prevReviews].filter(Boolean).map(r=>(
             <div key={r.id} style={{marginBottom:16,paddingBottom:16,borderBottom:`1px solid ${T.div}`}}>
               <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:6}}>
                 <div style={{...H,fontSize:14}}>{new Date(r.weekStart+'T12:00:00').toLocaleDateString("en-GB",{day:"numeric",month:"short",year:"numeric"})}</div>
                 {r.rating&&<div style={{...H,fontSize:22,color:r.rating>=8?"#39FF14":r.rating>=5?"#FFD700":"#FF3B5C"}}>{r.rating}/10</div>}
               </div>
               {r.auto&&<div style={{display:"flex",gap:8,marginBottom:8}}>
-                {[["WO",r.auto.workouts,"#FF6B35"],["SLEEP",r.auto.avgSleep?r.auto.avgSleep+"h":"—","#7DF9FF"],["MOOD",r.auto.avgMood,"#D0D0D0"]].map(([l,v,c])=>(
+                {[["WO",r.auto.workouts,"#FF6B35"],["SLEEP",r.auto.avgSleep?r.auto.avgSleep+"h":"—","#7DF9FF"],["MOOD",r.auto.avgMood,"#D0D0D0"],["ENERGY",r.auto.avgEnergy,"#39FF14"]].map(([l,v,c])=>(
                   <div key={l} style={{flex:1,borderTop:`1px solid ${c}`,paddingTop:5}}>
                     <div style={{...H,fontSize:8,color:"#444",letterSpacing:"0.1em"}}>{l}</div>
                     <div style={{...H,fontSize:16,color:c}}>{v||"—"}</div>
@@ -2916,7 +2979,15 @@ function DailyScreen(){
                 ))}
               </div>}
               {r.worked&&<div style={{color:T.sub,fontSize:12,marginBottom:3}}>✓ {r.worked}</div>}
+              {r.didnt&&<div style={{color:"#FF3B5C",fontSize:12,marginBottom:3}}>✗ {r.didnt}</div>}
               {r.note&&<div style={{color:"#444",fontSize:11}}>→ {r.note}</div>}
+              {r.auto?.gratitudes?.length>0&&(
+                <div style={{marginTop:6}}>
+                  {r.auto.gratitudes.map((g,i)=>(
+                    <div key={i} style={{borderLeft:"2px solid #333",paddingLeft:8,color:"#444",fontSize:11,fontStyle:"italic",marginBottom:4}}>"{g}"</div>
+                  ))}
+                </div>
+              )}
             </div>
           ))}
         </>)}
@@ -4414,6 +4485,16 @@ function MeScreen(){
   const avgRankIdx=rankedPRs.length?Math.round(rankedPRs.reduce((s,v)=>s+v,0)/rankedPRs.length):null;
   const RANK_LABELS=["UNTRAINED","BEGINNER","NOVICE","INTERMEDIATE","ADVANCED","ELITE"];
   const RANK_COLORS=["#4B5563","#9CA3AF","#60A5FA","#34D399","#F59E0B","#FF3B5C"];
+  // Compute overall body rank (RANKS system) and archetype
+  const muscleRankMap={};
+  const BODY_MUSCLES=[{key:"CHEST",cat:"hpush"},{key:"LATS",cat:"vpull"},{key:"DELTS_F",cat:"hpush"},{key:"DELTS_L",cat:"iso"},{key:"TRICEPS",cat:"iso"},{key:"BICEPS",cat:"iso"},{key:"TRAPS",cat:"iso"},{key:"QUADS",cat:"squat"},{key:"HAMSTRINGS",cat:"hinge"},{key:"GLUTES",cat:"hinge"},{key:"CORE",cat:"generic"}];
+  BODY_MUSCLES.forEach(m=>{const r=muscleRank(m,prs,bw);if(r)muscleRankMap[m.key]=r;});
+  const muscleScores=Object.values(muscleRankMap).map(r=>{const idx=["UNTRAINED","BEGINNER","NOVICE","INTERMEDIATE","ADVANCED","ELITE"].indexOf(r.n||"UNTRAINED");return Math.max(0,idx);});
+  const avgMuscleScore=muscleScores.length?muscleScores.reduce((s,v)=>s+v,0)/muscleScores.length:0;
+  // Map to 0-3+ scale for RANKS lookup
+  const rankRatio=avgMuscleScore/5*3;
+  const bodyRank=RANKS.find(x=>rankRatio>=x.min)||RANKS[RANKS.length-1];
+  const archetype=getArchetype(muscleRankMap,prs,bw);
   const latestFollowers=soMeFollowers.length?[...soMeFollowers].sort((a,b)=>b.date.localeCompare(a.date))[0]:null;
 
   const NavRow=({label,sub,onPress,color})=>(
@@ -4449,7 +4530,7 @@ function MeScreen(){
         </div>
       </div>
 
-      <div style={{display:"flex",gap:10,marginBottom:24}}>
+      <div style={{display:"flex",gap:10,marginBottom:16}}>
         <div style={{flex:1,borderTop:"2px solid #FF6B35",paddingTop:8}}>
           <div style={{...H,fontSize:9,color:T.sub,letterSpacing:"0.1em",marginBottom:2}}>STREAK</div>
           <div style={{...H,fontSize:22,color:"#FF6B35"}}>{streak}d</div>
@@ -4458,13 +4539,27 @@ function MeScreen(){
           <div style={{...H,fontSize:9,color:T.sub,letterSpacing:"0.1em",marginBottom:2}}>WEIGHT</div>
           <div style={{...H,fontSize:22}}>{bw}kg</div>
         </div>
-        {avgRankIdx!==null&&(
-          <div style={{flex:1.5,borderTop:`2px solid ${RANK_COLORS[avgRankIdx]}`,paddingTop:8}}>
-            <div style={{...H,fontSize:9,color:T.sub,letterSpacing:"0.1em",marginBottom:2}}>AVG RANK</div>
-            <div style={{...H,fontSize:16,color:RANK_COLORS[avgRankIdx],lineHeight:1.1}}>{RANK_LABELS[avgRankIdx]}</div>
-          </div>
-        )}
       </div>
+
+      {/* Body rank + archetype card */}
+      {bodyRank&&(
+        <div style={{background:T.card,padding:"14px 16px",marginBottom:20,borderLeft:`3px solid ${bodyRank.c}`}}>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:archetype?8:0}}>
+            <div>
+              <div style={{...H,fontSize:9,color:T.sub,letterSpacing:"0.1em",marginBottom:4}}>BODY RANK</div>
+              <div style={{...H,fontSize:28,color:bodyRank.c,lineHeight:1}}>{bodyRank.n}</div>
+              <div style={{color:T.sub,fontSize:11,marginTop:3}}>{bodyRank.desc}</div>
+            </div>
+            <button onClick={()=>go("rankExplainer")} style={{background:"none",border:"none",color:T.sub,cursor:"pointer",...H,fontSize:10,letterSpacing:"0.06em",marginTop:4}}>DETAIL ›</button>
+          </div>
+          {archetype&&(
+            <div style={{borderTop:`1px solid ${T.div}`,paddingTop:8,marginTop:8}}>
+              <div style={{...H,fontSize:10,color:bodyRank.c,letterSpacing:"0.08em",marginBottom:2}}>{archetype.name}</div>
+              <div style={{color:T.sub,fontSize:11}}>{archetype.desc}</div>
+            </div>
+          )}
+        </div>
+      )}
 
       <Divider/>
       <NavRow label="PHYSIQUE" sub="Phase tracker · weigh-ins · AI analysis" onPress={()=>go("physique")} color="#FF6B35"/>
