@@ -277,8 +277,9 @@ const GHEALTH_REDIRECT_URI=typeof window!=="undefined"?window.location.origin:"h
 const GHEALTH_SCOPES=[
   "https://www.googleapis.com/auth/googlehealth.sleep.readonly",
   "https://www.googleapis.com/auth/googlehealth.health_metrics_and_measurements.readonly",
-  "https://www.googleapis.com/auth/calendar.readonly",
 ].join(" ");
+
+const GCAL_SCOPES="https://www.googleapis.com/auth/calendar.readonly";
 
 // Generate a random PKCE code verifier
 const ghealthGenVerifier=()=>{
@@ -373,6 +374,65 @@ const ghealthGetValidToken=async()=>{
 };
 
 const ghealthDisconnect=async()=>{await S.set("ghealth_tokens",null);};
+
+// ─── Google Calendar OAuth2 (separate from Health — independent token) ─────────
+const gcalConnect=async()=>{
+  const verifier=ghealthGenVerifier();
+  const challenge=await ghealthGenChallenge(verifier);
+  sessionStorage.setItem("gcal_verifier",verifier);
+  const params=new URLSearchParams({
+    client_id:GHEALTH_CLIENT_ID,
+    redirect_uri:GHEALTH_REDIRECT_URI,
+    response_type:"code",
+    scope:GCAL_SCOPES,
+    access_type:"offline",
+    prompt:"consent",
+    code_challenge:challenge,
+    code_challenge_method:"S256",
+    state:"gcal", // distinguish from health callback
+  });
+  window.location.href=`https://accounts.google.com/o/oauth2/v2/auth?${params.toString()}`;
+};
+
+const gcalExchangeCode=async code=>{
+  const verifier=sessionStorage.getItem("gcal_verifier");
+  if(!verifier)throw new Error("Missing PKCE verifier — restart connection");
+  const res=await fetch("/api/ghealth-token",{
+    method:"POST",
+    headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({grant_type:"authorization_code",code,code_verifier:verifier,redirect_uri:GHEALTH_REDIRECT_URI}),
+  });
+  if(!res.ok)throw new Error("Token exchange failed: "+(await res.text()));
+  const tokens=await res.json();
+  sessionStorage.removeItem("gcal_verifier");
+  const stored={access_token:tokens.access_token,refresh_token:tokens.refresh_token,expires_at:Date.now()+(tokens.expires_in*1000)};
+  await S.set("gcal_tokens",stored);
+  return stored;
+};
+
+const gcalRefreshToken=async()=>{
+  const stored=await S.get("gcal_tokens");
+  if(!stored?.refresh_token)return null;
+  const res=await fetch("/api/ghealth-token",{
+    method:"POST",
+    headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({grant_type:"refresh_token",refresh_token:stored.refresh_token}),
+  });
+  if(!res.ok)return null;
+  const tokens=await res.json();
+  const updated={access_token:tokens.access_token,refresh_token:stored.refresh_token,expires_at:Date.now()+(tokens.expires_in*1000)};
+  await S.set("gcal_tokens",updated);
+  return updated;
+};
+
+const gcalGetValidToken=async()=>{
+  let stored=await S.get("gcal_tokens");
+  if(!stored)return null;
+  if(Date.now()>stored.expires_at-60000)stored=await gcalRefreshToken();
+  return stored?.access_token||null;
+};
+
+const gcalDisconnect=async()=>{await S.set("gcal_tokens",null);};
 
 // Fetch sleep data for a given date (YYYY-MM-DD), returns hours slept + bed/wake times, or null
 // Fetch sleep data across a date range [startDateStr, endDateStr] inclusive.
@@ -487,7 +547,7 @@ const ghealthFetchHRV=async(dateStr)=>{
 // Reuses the same Google OAuth token as Health (calendar.readonly scope added).
 // Fetches events for a given local date. Returns [{id, summary, start, end, allDay}].
 const gcalFetchEvents=async(dateStr)=>{
-  const token=await ghealthGetValidToken();
+  const token=await gcalGetValidToken();
   if(!token)return null;
   // Build local-day time window in RFC3339
   const dayStart=new Date(dateStr+'T00:00:00');
@@ -883,7 +943,7 @@ function BodyMap({status}){
 // ─── TODAY CHECKLIST (live Google Calendar) ───────────────────────────────────
 const GCAL_COLORS={"1":"#7986CB","2":"#33B679","3":"#8E24AA","4":"#E67C73","5":"#F6BF26","6":"#F4511E","7":"#039BE5","8":"#616161","9":"#3F51B5","10":"#0B8043","11":"#D50000"};
 function TodayChecklist(){
-  const {T,ghealthConnected}=useContext(Ctx);
+  const {T,gcalConnected}=useContext(Ctx);
   const [evts,setEvts]=useState(null);
   const [ticked,setTicked]=useState({});
   const [loading,setLoading]=useState(false);
@@ -899,7 +959,7 @@ function TodayChecklist(){
 
   const loadForDate=async(dateStr)=>{
     setLoading(true);setErr(null);setEvts(null);
-    if(!ghealthConnected){setErr('Connect Google in HEALTH tab');setLoading(false);return;}
+    if(!gcalConnected){setErr('Connect Google Calendar in HEALTH tab');setLoading(false);return;}
     try{
       const events=await gcalFetchEvents(dateStr);
       if(events===null)throw new Error(window._gcalDebug||'fetch failed');
@@ -1268,9 +1328,9 @@ function RankExplainerScreen(){
     <div style={{padding:"24px 20px"}}>
       <PageHeader title="STRENGTH RANKS"/>
 
-      {/* Tier key */}
+      {/* Tier key — per-lift strength levels */}
       <div style={{marginBottom:24}}>
-        <div style={{...H,fontSize:10,color:T.sub,letterSpacing:"0.12em",marginBottom:12}}>TIER SYSTEM</div>
+        <div style={{...H,fontSize:10,color:T.sub,letterSpacing:"0.12em",marginBottom:12}}>PER-LIFT TIER SYSTEM</div>
         {SL_TIERS.map(tier=>(
           <div key={tier.n} style={{display:"flex",justifyContent:"space-between",alignItems:"baseline",marginBottom:10,paddingBottom:10,borderBottom:`1px solid ${T.div}`}}>
             <div style={{display:"flex",alignItems:"center",gap:10}}>
@@ -1290,6 +1350,20 @@ function RankExplainerScreen(){
           </div>
           <div style={{color:T.sub,fontSize:10}}>below beginner standards</div>
         </div>
+      </div>
+
+      {/* Body rank — overall 10-level system */}
+      <div style={{marginBottom:24}}>
+        <div style={{...H,fontSize:10,color:T.sub,letterSpacing:"0.12em",marginBottom:12}}>OVERALL BODY RANK — 10 LEVELS</div>
+        {RANKS.map(rank=>(
+          <div key={rank.n} style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10,paddingBottom:10,borderBottom:`1px solid ${T.div}`}}>
+            <div style={{display:"flex",alignItems:"center",gap:10}}>
+              <div style={{width:8,height:8,borderRadius:"50%",background:rank.c,flexShrink:0}}/>
+              <div style={{...H,fontSize:15,color:rank.c}}>{rank.n}</div>
+            </div>
+            <div style={{color:T.sub,fontSize:11,textAlign:"right"}}>{rank.desc}</div>
+          </div>
+        ))}
       </div>
 
       {/* All logged exercises with their rank */}
@@ -2701,6 +2775,7 @@ function DailyScreen(){
   const [nMissed,setNMissed]=useState("");const [nGratitude,setNGratitude]=useState("");
   const [wkRating,setWkRating]=useState(null);const [wkWorked,setWkWorked]=useState("");const [wkDidnt,setWkDidnt]=useState("");const [wkNote,setWkNote]=useState("");const [wkSaved,setWkSaved]=useState(false);
   const [wkTab,setWkTab]=useState("this");
+  const [wkEditId,setWkEditId]=useState(null); // weekStart of review being edited in history
   const [editDate,setEditDate]=useState(null);
   const [editBuf,setEditBuf]=useState({});
 
@@ -2955,7 +3030,12 @@ function DailyScreen(){
             </div>
           ))}
 
-          <Btn label={wkSaved?"SAVED ✓ — VIEW HISTORY":"SAVE REVIEW"} onClick={async()=>{await saveReview();setWkTab("history");}} style={{marginBottom:12}}/>
+          <Btn label={wkSaved?"SAVED ✓ — VIEW HISTORY":"SAVE REVIEW"} onClick={async()=>{
+            await saveReview();
+            // Clear form after saving
+            setWkRating(null);setWkWorked("");setWkDidnt("");setWkNote("");
+            setWkTab("history");
+          }} style={{marginBottom:12}}/>
           <AiWeeklySummary weekData={{workouts:wkWO.length,avgSleep,avgMood,avgEnergy,barberPct,gratitudes,worked:wkWorked,didnt:wkDidnt,note:wkNote,rating:wkRating}} morningLogs={wkML} nightLogs={wkNL} workoutLogs={wkWO}/>
         </>)}
 
@@ -2964,32 +3044,68 @@ function DailyScreen(){
           {prevReviews.length===0&&!existing&&(
             <div style={{color:T.sub,fontSize:12,paddingTop:20,textAlign:"center"}}>No reviews saved yet.</div>
           )}
-          {[existing,...prevReviews].filter(Boolean).map(r=>(
-            <div key={r.id} style={{marginBottom:16,paddingBottom:16,borderBottom:`1px solid ${T.div}`}}>
-              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:6}}>
-                <div style={{...H,fontSize:14}}>{new Date(r.weekStart+'T12:00:00').toLocaleDateString("en-GB",{day:"numeric",month:"short",year:"numeric"})}</div>
-                {r.rating&&<div style={{...H,fontSize:22,color:r.rating>=8?"#39FF14":r.rating>=5?"#FFD700":"#FF3B5C"}}>{r.rating}/10</div>}
-              </div>
-              {r.auto&&<div style={{display:"flex",gap:8,marginBottom:8}}>
-                {[["WO",r.auto.workouts,"#FF6B35"],["SLEEP",r.auto.avgSleep?r.auto.avgSleep+"h":"—","#7DF9FF"],["MOOD",r.auto.avgMood,"#D0D0D0"],["ENERGY",r.auto.avgEnergy,"#39FF14"]].map(([l,v,c])=>(
-                  <div key={l} style={{flex:1,borderTop:`1px solid ${c}`,paddingTop:5}}>
-                    <div style={{...H,fontSize:8,color:"#444",letterSpacing:"0.1em"}}>{l}</div>
-                    <div style={{...H,fontSize:16,color:c}}>{v||"—"}</div>
+          {[existing,...prevReviews].filter(Boolean).map(r=>{
+            const isEditing=wkEditId===r.weekStart;
+            return(
+              <div key={r.id} style={{marginBottom:16,paddingBottom:16,borderBottom:`1px solid ${T.div}`}}>
+                {isEditing?(
+                  // Inline edit form
+                  <div>
+                    <div style={{...H,fontSize:12,color:T.sub,marginBottom:10}}>{new Date(r.weekStart+'T12:00:00').toLocaleDateString("en-GB",{day:"numeric",month:"short",year:"numeric"})}</div>
+                    <div style={{display:"flex",gap:4,marginBottom:12}}>
+                      {[1,2,3,4,5,6,7,8,9,10].map(n=>(
+                        <button key={n} onClick={()=>setWkRating(n)} style={{flex:1,padding:"7px 0",background:wkRating===n?T.text:"transparent",color:wkRating===n?T.bg:T.sub,border:`1px solid ${wkRating===n?T.text:"#222"}`,borderRadius:0,...H,fontSize:10,cursor:"pointer"}}>{n}</button>
+                      ))}
+                    </div>
+                    {[["WHAT WORKED",wkWorked,setWkWorked,"What went well..."],["WHAT DIDN'T",wkDidnt,setWkDidnt,"What fell short..."],["NOTE",wkNote,setWkNote,"One adjustment..."]].map(([l,v,sv,ph])=>(
+                      <div key={l} style={{marginBottom:10}}>
+                        <div style={{...H,fontSize:9,color:T.sub,letterSpacing:"0.1em",marginBottom:4}}>{l}</div>
+                        <textarea value={v} onChange={e=>sv(e.target.value)} placeholder={ph} style={ta}/>
+                      </div>
+                    ))}
+                    <div style={{display:"flex",gap:8}}>
+                      <Btn label="SAVE" onClick={async()=>{
+                        const updated=weeklyReviews.map(rev=>rev.weekStart===r.weekStart?{...rev,rating:wkRating,worked:wkWorked,didnt:wkDidnt,note:wkNote}:rev);
+                        await saveWeeklyReviews(updated);
+                        setWkEditId(null);setWkRating(null);setWkWorked("");setWkDidnt("");setWkNote("");
+                      }} style={{flex:1,padding:"10px"}}/>
+                      <Btn label="CANCEL" onClick={()=>{setWkEditId(null);setWkRating(null);setWkWorked("");setWkDidnt("");setWkNote("");}} ghost style={{flex:0.6,padding:"10px"}}/>
+                    </div>
                   </div>
-                ))}
-              </div>}
-              {r.worked&&<div style={{color:T.sub,fontSize:12,marginBottom:3}}>✓ {r.worked}</div>}
-              {r.didnt&&<div style={{color:"#FF3B5C",fontSize:12,marginBottom:3}}>✗ {r.didnt}</div>}
-              {r.note&&<div style={{color:"#444",fontSize:11}}>→ {r.note}</div>}
-              {r.auto?.gratitudes?.length>0&&(
-                <div style={{marginTop:6}}>
-                  {r.auto.gratitudes.map((g,i)=>(
-                    <div key={i} style={{borderLeft:"2px solid #333",paddingLeft:8,color:"#444",fontSize:11,fontStyle:"italic",marginBottom:4}}>"{g}"</div>
-                  ))}
-                </div>
-              )}
-            </div>
-          ))}
+                ):(
+                  // Read view
+                  <div>
+                    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:6}}>
+                      <div style={{...H,fontSize:14}}>{new Date(r.weekStart+'T12:00:00').toLocaleDateString("en-GB",{day:"numeric",month:"short",year:"numeric"})}</div>
+                      <div style={{display:"flex",gap:10,alignItems:"center"}}>
+                        {r.rating&&<div style={{...H,fontSize:22,color:r.rating>=8?"#39FF14":r.rating>=5?"#FFD700":"#FF3B5C"}}>{r.rating}/10</div>}
+                        <button onClick={()=>{setWkEditId(r.weekStart);setWkRating(r.rating||null);setWkWorked(r.worked||"");setWkDidnt(r.didnt||"");setWkNote(r.note||"");}} style={{background:"none",border:"none",color:T.sub,cursor:"pointer",...H,fontSize:10,letterSpacing:"0.04em"}}>EDIT</button>
+                        <button onClick={async()=>await saveWeeklyReviews(weeklyReviews.filter(rev=>rev.weekStart!==r.weekStart))} style={{background:"none",border:"none",color:"#333",cursor:"pointer",fontSize:14}}>×</button>
+                      </div>
+                    </div>
+                    {r.auto&&<div style={{display:"flex",gap:8,marginBottom:8}}>
+                      {[["WO",r.auto.workouts,"#FF6B35"],["SLEEP",r.auto.avgSleep?r.auto.avgSleep+"h":"—","#7DF9FF"],["MOOD",r.auto.avgMood,"#D0D0D0"],["ENERGY",r.auto.avgEnergy,"#39FF14"]].map(([l,v,c])=>(
+                        <div key={l} style={{flex:1,borderTop:`1px solid ${c}`,paddingTop:5}}>
+                          <div style={{...H,fontSize:8,color:"#444",letterSpacing:"0.1em"}}>{l}</div>
+                          <div style={{...H,fontSize:16,color:c}}>{v||"—"}</div>
+                        </div>
+                      ))}
+                    </div>}
+                    {r.worked&&<div style={{color:T.sub,fontSize:12,marginBottom:3}}>✓ {r.worked}</div>}
+                    {r.didnt&&<div style={{color:"#FF3B5C",fontSize:12,marginBottom:3}}>✗ {r.didnt}</div>}
+                    {r.note&&<div style={{color:"#444",fontSize:11}}>→ {r.note}</div>}
+                    {r.auto?.gratitudes?.length>0&&(
+                      <div style={{marginTop:6}}>
+                        {r.auto.gratitudes.map((g,i)=>(
+                          <div key={i} style={{borderLeft:"2px solid #333",paddingLeft:8,color:"#444",fontSize:11,fontStyle:"italic",marginBottom:4}}>"{g}"</div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            );
+          })}
         </>)}
       </div>
     );
@@ -3169,7 +3285,7 @@ function DailyScreen(){
 
 // ─── HEALTH HEALTH ───────────────────────────────────────────────────────────────────
 function HealthScreen(){
-  const {T,morningLogs,nightLogs,workoutLogs,goals,apiKey,ghealthConnected,ghealthSyncing,ghealthError,ghealthSyncToday,ghealthSyncWeek,ghealthDoConnect,ghealthDoDisconnect}=useContext(Ctx);
+  const {T,morningLogs,nightLogs,workoutLogs,goals,apiKey,ghealthConnected,ghealthSyncing,ghealthError,ghealthSyncToday,ghealthSyncWeek,ghealthDoConnect,ghealthDoDisconnect,gcalConnected,gcalDoConnect,gcalDoDisconnect}=useContext(Ctx);
   const [period,setPeriod]=useState(30);
   const [insights,setInsights]=useState(null);
   const [aiLoading,setAiLoading]=useState(false);
@@ -3470,12 +3586,12 @@ function HealthScreen(){
     <div style={{padding:"24px 20px"}}>
       <PageHeader title="HEALTH"/>
 
-      {/* Google Health connect card */}
-      <div style={{background:T.card,padding:"14px 16px",marginBottom:16}}>
+      {/* Google Health connect card — sleep, HRV, RHR */}
+      <div style={{background:T.card,padding:"14px 16px",marginBottom:10}}>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:ghealthConnected?10:0}}>
           <div>
             <div style={{...H,fontSize:13}}>GOOGLE HEALTH</div>
-            <div style={{color:T.sub,fontSize:11,marginTop:2}}>{ghealthConnected?"Connected · Fitbit Charge 6":"Sync sleep, HRV, resting HR automatically"}</div>
+            <div style={{color:T.sub,fontSize:11,marginTop:2}}>{ghealthConnected?"Connected · Fitbit Charge 6 · Sleep · HRV · RHR":"Sync sleep, HRV, resting HR from Fitbit"}</div>
           </div>
           {ghealthConnected?(
             <button onClick={ghealthDoDisconnect} style={{background:"transparent",border:`1px solid ${T.div}`,color:T.sub,padding:"7px 12px",borderRadius:2,fontFamily:"'Barlow Condensed',sans-serif",fontWeight:700,fontSize:11,cursor:"pointer"}}>DISCONNECT</button>
@@ -3495,6 +3611,21 @@ function HealthScreen(){
         )}
         {weekSyncResult&&<div style={{color:"#39FF14",fontSize:11,marginTop:8}}>Filled {weekSyncResult} day{weekSyncResult===1?"":"s"} from the past week</div>}
         {ghealthError&&<div style={{color:"#FF3B5C",fontSize:11,marginTop:8}}>{ghealthError}</div>}
+      </div>
+
+      {/* Google Calendar connect card — separate token, separate scope */}
+      <div style={{background:T.card,padding:"14px 16px",marginBottom:16}}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+          <div>
+            <div style={{...H,fontSize:13}}>GOOGLE CALENDAR</div>
+            <div style={{color:T.sub,fontSize:11,marginTop:2}}>{gcalConnected?"Connected · Agenda on HOME":"Show today's events + completion on HOME"}</div>
+          </div>
+          {gcalConnected?(
+            <button onClick={gcalDoDisconnect} style={{background:"transparent",border:`1px solid ${T.div}`,color:T.sub,padding:"7px 12px",borderRadius:2,fontFamily:"'Barlow Condensed',sans-serif",fontWeight:700,fontSize:11,cursor:"pointer"}}>DISCONNECT</button>
+          ):(
+            <button onClick={gcalDoConnect} style={{background:"#34D399",border:"none",color:"#000",padding:"7px 14px",borderRadius:2,fontFamily:"'Barlow Condensed',sans-serif",fontWeight:900,fontSize:11,cursor:"pointer"}}>CONNECT</button>
+          )}
+        </div>
       </div>
 
       {/* Period selector */}
@@ -4735,6 +4866,7 @@ export default function KataokaApp(){
   const [ghealthConnected,setGhealthConnected]=useState(false);
   const [ghealthSyncing,setGhealthSyncing]=useState(false);
   const [ghealthError,setGhealthError]=useState(null);
+  const [gcalConnected,setGcalConnected]=useState(false);
 
   useEffect(()=>{
     const load=async()=>{
@@ -4757,23 +4889,31 @@ export default function KataokaApp(){
 
     // Check if we're connected already
     S.get("ghealth_tokens").then(t=>{if(t?.refresh_token)setGhealthConnected(true);});
+    S.get("gcal_tokens").then(t=>{if(t?.refresh_token)setGcalConnected(true);});
 
-    // Handle OAuth redirect callback (Google sends ?code=... back to this URL)
+    // Handle OAuth redirect callback
     const urlParams=new URLSearchParams(window.location.search);
     const code=urlParams.get("code");
+    const oauthState=urlParams.get("state"); // "gcal" for calendar, null/empty for health
     const oauthError=urlParams.get("error");
     if(oauthError){
-      setGhealthError("Connection cancelled or denied");
       window.history.replaceState({},"",window.location.pathname);
     } else if(code){
-      ghealthExchangeCode(code).then(()=>{
-        setGhealthConnected(true);
-        setGhealthError(null);
-        window.history.replaceState({},"",window.location.pathname);
-      }).catch(e=>{
-        setGhealthError("Connection failed: "+e.message);
-        window.history.replaceState({},"",window.location.pathname);
-      });
+      if(oauthState==="gcal"){
+        gcalExchangeCode(code).then(()=>{
+          setGcalConnected(true);
+          window.history.replaceState({},"",window.location.pathname);
+        }).catch(()=>{
+          window.history.replaceState({},"",window.location.pathname);
+        });
+      } else {
+        ghealthExchangeCode(code).then(()=>{
+          setGhealthConnected(true);
+          window.history.replaceState({},"",window.location.pathname);
+        }).catch(()=>{
+          window.history.replaceState({},"",window.location.pathname);
+        });
+      }
     }
   },[]);
 
@@ -4877,6 +5017,8 @@ export default function KataokaApp(){
   };
   const ghealthDoConnect=()=>ghealthConnect();
   const ghealthDoDisconnect=async()=>{await ghealthDisconnect();setGhealthConnected(false);};
+  const gcalDoConnect=()=>gcalConnect();
+  const gcalDoDisconnect=async()=>{await gcalDisconnect();setGcalConnected(false);};
   const saveNightLogs=async v=>{setNightLogs(v);await S.set("night_logs",v);};
   const saveGoals=async v=>{setGoals(v);await S.set("goals",v);};
   const saveComingSoon=async v=>{setComingSoon(v);await S.set("coming_soon",v);};
@@ -4948,7 +5090,8 @@ export default function KataokaApp(){
     templates,saveTemplates,workoutLogs,saveLogs,prs,checkPR,commitWorkout,resetAllData,resetPRs,
     barberWeeks,saveBarberWeeks,barberIncome,saveBarberIncome,barberDays,saveBarberDays,
     morningLogs,saveMorningLogs,nightLogs,saveNightLogs,goals,saveGoals,comingSoon,saveComingSoon,userDOB,saveDOB,bw,saveBw,userName,saveUserName,quotes,saveQuotes,weeklyReviews,saveWeeklyReviews,soMeVideos,saveSoMeVideos,soMeFollowers,saveSoMeFollowers,habits,saveHabits,hrvLogs,saveHrvLogs,financeMonths,saveFinanceMonths,appNotes,saveAppNotes,apiKey,saveApiKey,
-    ghealthConnected,ghealthSyncing,ghealthError,ghealthSyncToday,ghealthSyncWeek,ghealthDoConnect,ghealthDoDisconnect};
+    ghealthConnected,ghealthSyncing,ghealthError,ghealthSyncToday,ghealthSyncWeek,ghealthDoConnect,ghealthDoDisconnect,
+    gcalConnected,gcalDoConnect,gcalDoDisconnect};
 
   const SCREENS={home:HomeScreen,workout:WorkoutHome,"workout-log":LogChoose,"workout-edit-templates":EditTemplates,"workout-ranks":RankExplainerScreen,"workout-templates":TemplatePick,"workout-active":ActiveWorkout,"workout-history":WorkoutHistory,"workout-session":WorkoutSession,"workout-progress":ProgressTracker,"workout-create":CreateTemplate,"workout-exercise":ExerciseProgress,barber:BarberScreen,daily:DailyScreen,health:HealthScreen,goals:GoalsScreen,me:MeScreen,quotes:QuoteVaultScreen,some:SoMeScreen,financials:FinancialsScreen,physique:PhysiqueScreen};
   const Screen=SCREENS[screen]||HomeScreen;
